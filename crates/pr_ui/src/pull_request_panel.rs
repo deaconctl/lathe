@@ -707,7 +707,11 @@ impl PullRequestPanel {
         let filter = self.filter;
         let reviewing = self.reviewing;
         let sort = self.sort;
-        let registry = GitHostingProviderRegistry::global(cx);
+        // The registry is installed at startup; contexts without it (headless
+        // tests) have no hosts to query, so there is nothing to refresh.
+        let Some(registry) = GitHostingProviderRegistry::try_global(cx) else {
+            return;
+        };
         let http_client = cx.http_client();
         let workspace_id = self.workspace.entity_id();
         let Some(section) = self.sections.get_mut(index) else {
@@ -850,7 +854,11 @@ impl PullRequestPanel {
         let filter = self.filter;
         let reviewing = self.reviewing;
         let sort = self.sort;
-        let registry = GitHostingProviderRegistry::global(cx);
+        // The registry is installed at startup; contexts without it (headless
+        // tests) have no hosts to query, so there is nothing to refresh.
+        let Some(registry) = GitHostingProviderRegistry::try_global(cx) else {
+            return;
+        };
         let http_client = cx.http_client();
         let workspace_id = self.workspace.entity_id();
         let Some(section) = self.sections.get_mut(index) else {

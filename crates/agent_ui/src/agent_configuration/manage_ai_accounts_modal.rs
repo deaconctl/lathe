@@ -8,8 +8,8 @@ use ai_accounts::{
 };
 use fs::RemoveOptions;
 use gpui::{
-    AnyElement, DismissEvent, EventEmitter, FocusHandle, Focusable, Hsla, Rgba, ScrollHandle,
-    Task, WeakEntity, WindowAppearance, prelude::*, px,
+    AnyElement, DismissEvent, EventEmitter, FocusHandle, Focusable, Hsla, Rgba, ScrollHandle, Task,
+    WeakEntity, WindowAppearance, prelude::*, px,
 };
 use notifications::status_toast::StatusToast;
 use settings::update_settings_file;

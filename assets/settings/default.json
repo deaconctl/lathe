@@ -796,7 +796,7 @@
     // Whether to match case sensitively.
     "case_sensitive": false,
     // Start searching as you type in project search, without pressing Enter.
-    "search_on_type": false,
+    "search_on_type": true,
     // Whether to include gitignored files in search results.
     "include_ignored": false,
     // Whether to interpret the search query as a regular expression.

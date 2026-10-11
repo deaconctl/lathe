@@ -388,6 +388,12 @@ impl EditorElement {
         crate::clangd_ext::apply_related_actions(editor, window, cx);
         crate::emmet_ext::apply_related_actions(editor, window, cx);
 
+        if editor.read(cx).pending_inline_input().is_some() {
+            register_action(editor, window, |editor, _: &menu::Confirm, window, cx| {
+                editor.confirm_inline_input(window, cx);
+            });
+        }
+
         register_action(editor, window, Editor::open_context_menu);
         register_action(editor, window, Editor::move_left);
         register_action(editor, window, Editor::move_right);
@@ -11504,9 +11510,24 @@ pub fn register_action<T: Action>(
     window: &mut Window,
     listener: impl Fn(&mut Editor, &T, &mut Window, &mut Context<Editor>) + 'static,
 ) {
+    register_action_erased(
+        editor,
+        window,
+        TypeId::of::<T>(),
+        Box::new(move |editor, action, window, cx| {
+            listener(editor, action.downcast_ref().unwrap(), window, cx)
+        }),
+    )
+}
+
+fn register_action_erased(
+    editor: &Entity<Editor>,
+    window: &mut Window,
+    action_type: TypeId,
+    listener: Box<dyn Fn(&mut Editor, &dyn std::any::Any, &mut Window, &mut Context<Editor>)>,
+) {
     let editor = editor.clone();
-    window.on_action(TypeId::of::<T>(), move |action, phase, window, cx| {
-        let action = action.downcast_ref().unwrap();
+    window.on_action(action_type, move |action, phase, window, cx| {
         if phase == DispatchPhase::Bubble {
             editor.update(cx, |editor, cx| {
                 listener(editor, action, window, cx);
@@ -13951,6 +13972,16 @@ mod tests {
 
         // line height is close to 1/4 the target height
         assert_eq!(EditorElement::spacer_pattern_period(20.0, 4.8), 5.0);
+    }
+
+    #[test]
+    fn cursor_animation_supports_bar_and_block_shapes() {
+        assert!(cursor_shape_supports_cursor_animation(CursorShape::Bar));
+        assert!(cursor_shape_supports_cursor_animation(CursorShape::Block));
+        assert!(!cursor_shape_supports_cursor_animation(
+            CursorShape::Underline
+        ));
+        assert!(!cursor_shape_supports_cursor_animation(CursorShape::Hollow));
     }
 
     #[gpui::test(iterations = 100)]

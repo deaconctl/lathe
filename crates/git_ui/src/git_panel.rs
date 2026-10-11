@@ -14225,6 +14225,74 @@ mod tests {
     }
 
     #[gpui::test]
+    async fn test_explorer_branch_drag_shows_preview_and_offers_rebase(cx: &mut TestAppContext) {
+        init_test(cx);
+
+        let fs = FakeFs::new(cx.background_executor.clone());
+        fs.insert_tree(
+            path!("/project"),
+            json!({ ".git": {}, "tracked": "tracked\n" }),
+        )
+        .await;
+        fs.insert_branches(path!("/project/.git").as_ref(), &["main", "feature"]);
+        fs.set_branch_name(path!("/project/.git").as_ref(), Some("main"));
+
+        let project = Project::test(fs.clone(), [Path::new(path!("/project"))], cx).await;
+        let window_handle =
+            cx.add_window(|window, cx| MultiWorkspace::test_new(project.clone(), window, cx));
+        let workspace = window_handle
+            .read_with(cx, |mw, _| mw.workspace().clone())
+            .unwrap();
+        let cx = &mut VisualTestContext::from_window(window_handle.into(), cx);
+        let panel = workspace.update_in(cx, GitPanel::new);
+        cx.run_until_parked();
+        workspace.update_in(cx, |workspace, window, cx| {
+            workspace.add_panel(panel.clone(), window, cx);
+            workspace.open_panel::<GitPanel>(window, cx);
+        });
+        panel.update_in(cx, |panel, window, cx| {
+            panel.set_active_tab(GitPanelTab::Explorer, window, cx);
+        });
+        cx.run_until_parked();
+        cx.simulate_resize(gpui::size(px(1200.), px(800.)));
+
+        let source = cx
+            .debug_bounds("git-explorer-row-feature")
+            .expect("feature branch row should render in the Explorer");
+        let target = cx
+            .debug_bounds("git-explorer-row-main")
+            .expect("main branch row should render in the Explorer");
+        let modifiers = gpui::Modifiers::default();
+        cx.simulate_mouse_down(source.center(), MouseButton::Left, modifiers);
+        cx.simulate_mouse_move(
+            source.center() + gpui::point(px(0.), px(8.)),
+            MouseButton::Left,
+            modifiers,
+        );
+        cx.simulate_mouse_move(target.center(), MouseButton::Left, modifiers);
+        assert!(
+            cx.update(|_, cx| cx.has_active_drag()),
+            "dragging a branch row should start a drag"
+        );
+        cx.run_until_parked();
+        assert!(
+            cx.debug_bounds("git-explorer-drag-preview").is_some(),
+            "the dragged branch should render a preview under the cursor"
+        );
+        cx.simulate_mouse_up(target.center(), MouseButton::Left, modifiers);
+        cx.run_until_parked();
+
+        workspace.read_with(cx, |workspace, cx| {
+            assert!(
+                workspace
+                    .active_modal::<crate::rebase_confirm_modal::RebaseConfirmModal>(cx)
+                    .is_some(),
+                "dropping a branch onto another should open the rebase confirmation"
+            );
+        });
+    }
+
+    #[gpui::test]
     async fn test_dispatch_context_with_focus_states(cx: &mut TestAppContext) {
         init_test(cx);
 

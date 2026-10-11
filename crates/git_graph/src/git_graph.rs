@@ -84,6 +84,32 @@ pub struct DraggedGraphRef {
     pub is_current: bool,
 }
 
+/// What follows the cursor while a branch or commit is dragged in the graph.
+struct GraphDragPreview {
+    icon: IconName,
+    label: SharedString,
+}
+
+impl Render for GraphDragPreview {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        h_flex()
+            .debug_selector(|| "git-graph-drag-preview".into())
+            .bg(cx.theme().colors().background)
+            .border_1()
+            .border_color(cx.theme().colors().border)
+            .rounded_md()
+            .px_2()
+            .py_0p5()
+            .gap_1()
+            .child(
+                Icon::new(self.icon)
+                    .size(IconSize::Small)
+                    .color(Color::Muted),
+            )
+            .child(Label::new(self.label.clone()).size(LabelSize::Small))
+    }
+}
+
 /// Drag payload for dragging a commit onto a branch ref. Drop on a ref chip
 /// triggers a cherry-pick onto that branch.
 #[derive(Debug, Clone)]
@@ -1713,6 +1739,9 @@ pub struct GitGraph {
     /// the canvas half is suppressed (lanes for a non-contiguous subset would
     /// be misleading).
     filter_mode: bool,
+    /// Row a dragged branch would land on when released over the graph column,
+    /// which has no per-row elements to carry their own drop highlight.
+    drop_target_entry_idx: Option<usize>,
 }
 
 impl GitGraph {
@@ -2016,6 +2045,7 @@ impl GitGraph {
             pending_select_sha: None,
             nav_history: None,
             filter_mode: false,
+            drop_target_entry_idx: None,
         };
 
         this.fetch_initial_graph_data(cx);
@@ -2197,41 +2227,47 @@ impl GitGraph {
 
         div()
             .id(chip_id)
+            .debug_selector(|| format!("git-graph-ref-chip-{branch_name}"))
             .min_w_0()
             .overflow_hidden()
             .when_some(drag_payload, |chip, payload| {
-                chip.on_drag(payload, |_payload, _, _, cx| cx.new(|_| Empty))
-                    .drag_over::<DraggedGraphCommit>(|chip, _payload, _, cx| {
-                        chip.bg(cx.theme().colors().drop_target_background)
+                chip.on_drag(payload, |payload, _, _, cx| {
+                    cx.new(|_| GraphDragPreview {
+                        icon: IconName::GitBranch,
+                        label: payload.branch_name.clone().into(),
                     })
-                    .on_drop::<DraggedGraphCommit>(move |payload, _, cx| {
-                        let payload = payload.clone();
-                        let target_branch = target_for_commit_drop.clone();
-                        weak_for_commit_drop
-                            .update(cx, |this, cx| {
-                                this.handle_commit_drop_on_ref(target_branch, payload, cx);
-                            })
-                            .ok();
-                    })
-                    .drag_over::<DraggedGraphRef>({
-                        let target = branch_name.clone();
-                        move |chip, payload, _, cx| {
-                            if payload.branch_name == target {
-                                chip
-                            } else {
-                                chip.bg(cx.theme().colors().drop_target_background)
-                            }
+                })
+                .drag_over::<DraggedGraphCommit>(|chip, _payload, _, cx| {
+                    chip.bg(cx.theme().colors().drop_target_background)
+                })
+                .on_drop::<DraggedGraphCommit>(move |payload, _, cx| {
+                    let payload = payload.clone();
+                    let target_branch = target_for_commit_drop.clone();
+                    weak_for_commit_drop
+                        .update(cx, |this, cx| {
+                            this.handle_commit_drop_on_ref(target_branch, payload, cx);
+                        })
+                        .ok();
+                })
+                .drag_over::<DraggedGraphRef>({
+                    let target = branch_name.clone();
+                    move |chip, payload, _, cx| {
+                        if payload.branch_name == target {
+                            chip
+                        } else {
+                            chip.bg(cx.theme().colors().drop_target_background)
                         }
-                    })
-                    .on_drop::<DraggedGraphRef>(move |payload, window, cx| {
-                        let payload = payload.clone();
-                        let target = target_for_ref_drop.clone();
-                        weak_for_ref_drop
-                            .update(cx, |this, cx| {
-                                this.handle_ref_drop_on_ref(target, payload, window, cx);
-                            })
-                            .ok();
-                    })
+                    }
+                })
+                .on_drop::<DraggedGraphRef>(move |payload, window, cx| {
+                    let payload = payload.clone();
+                    let target = target_for_ref_drop.clone();
+                    weak_for_ref_drop
+                        .update(cx, |this, cx| {
+                            this.handle_ref_drop_on_ref(target, payload, window, cx);
+                        })
+                        .ok();
+                })
             })
             .child(
                 Chip::new(name.clone())
@@ -4092,7 +4128,17 @@ impl GitGraph {
         // canvas entirely; the column shrinks to whatever the user resized it
         // to and the table half takes the rest.
         if self.filter_mode {
-            return div().size_full().into_any_element();
+            // Still record where the canvas sits: the gutter's hit testing and
+            // the drop target resolve rows from it.
+            let graph_canvas_bounds = self.graph_canvas_bounds.clone();
+            return gpui::canvas(
+                move |_bounds, _window, _cx| {},
+                move |bounds: Bounds<Pixels>, _: (), _window: &mut Window, _cx: &mut App| {
+                    graph_canvas_bounds.set(Some(bounds));
+                },
+            )
+            .size_full()
+            .into_any_element();
         }
         let row_height = Self::row_height(window, cx);
         let visible_row_count = self.visible_row_count(window, cx);
@@ -4143,6 +4189,7 @@ impl GitGraph {
             .context_menu
             .as_ref()
             .and_then(|menu| menu.target_entry_index);
+        let drop_target_entry_idx = self.drop_target_entry_idx;
         let is_focused = self.focus_handle.is_focused(window);
         let graph_canvas_bounds = self.graph_canvas_bounds.clone();
 
@@ -4162,6 +4209,7 @@ impl GitGraph {
                     } else {
                         theme.colors().element_hover
                     };
+                    let drop_target_bg = theme.colors().drop_target_background;
 
                     for visible_row_idx in 0..rows.len() {
                         let absolute_row_idx = first_visible_row + visible_row_idx;
@@ -4169,8 +4217,9 @@ impl GitGraph {
                         let is_selected = selected_entry_idx == Some(absolute_row_idx);
                         let is_context_menu_target =
                             context_menu_target_index == Some(absolute_row_idx);
+                        let is_drop_target = drop_target_entry_idx == Some(absolute_row_idx);
 
-                        if is_hovered || is_selected || is_context_menu_target {
+                        if is_hovered || is_selected || is_context_menu_target || is_drop_target {
                             let row_y = bounds.origin.y + visible_row_idx as f32 * row_height
                                 - vertical_scroll_offset;
                             let row_bounds = Bounds::new(
@@ -4181,7 +4230,9 @@ impl GitGraph {
                                 },
                             );
 
-                            let bg_color = if is_selected || is_context_menu_target {
+                            let bg_color = if is_drop_target {
+                                drop_target_bg
+                            } else if is_selected || is_context_menu_target {
                                 selected_bg
                             } else {
                                 hover_bg
@@ -4423,7 +4474,8 @@ impl GitGraph {
             .last_item_size
             .map(|size| size.item.height)
             .unwrap_or(window.viewport_size().height);
-        let loaded_commit_count = self.graph_data.commits.len();
+        // Rows here are display rows, which differ from commit indices in filter mode.
+        let loaded_commit_count = self.visible_filtered_row_count(self.graph_data.commits.len());
 
         let content_height = row_height * loaded_commit_count;
         let max_scroll = (content_height - viewport_height).max(px(0.));
@@ -4456,6 +4508,8 @@ impl GitGraph {
             .context_menu
             .as_ref()
             .and_then(|menu| menu.target_entry_index);
+        let drop_target_entry_idx = self.drop_target_entry_idx;
+        let drop_target_bg = theme.colors().drop_target_background;
         let is_focused = self.focus_handle.is_focused(window);
         let hover_bg = theme.colors().element_hover.opacity(0.6);
         let selected_bg = if is_focused {
@@ -4467,17 +4521,27 @@ impl GitGraph {
         // Background highlight bands for hovered/selected rows, painted first so
         // the labels render on top of them.
         let mut elements = Vec::with_capacity(viewport_range.len());
-        for absolute_idx in viewport_range.clone() {
+        for display_idx in viewport_range.clone() {
+            let Some(absolute_idx) = self.absolute_index_for_display_row(display_idx) else {
+                continue;
+            };
+            let is_drop_target = drop_target_entry_idx == Some(absolute_idx);
             let is_selected = selected_entry_idx == Some(absolute_idx)
                 || context_menu_entry_idx == Some(absolute_idx);
             let is_hovered = hovered_entry_idx == Some(absolute_idx);
-            if !is_selected && !is_hovered {
+            if !is_selected && !is_hovered && !is_drop_target {
                 continue;
             }
 
-            let visible_row_idx = absolute_idx - first_visible_row;
+            let visible_row_idx = display_idx - first_visible_row;
             let top = visible_row_idx as f32 * row_height - vertical_scroll_offset;
-            let bg_color = if is_selected { selected_bg } else { hover_bg };
+            let bg_color = if is_drop_target {
+                drop_target_bg
+            } else if is_selected {
+                selected_bg
+            } else {
+                hover_bg
+            };
 
             elements.push(
                 div()
@@ -4491,7 +4555,10 @@ impl GitGraph {
             );
         }
 
-        for absolute_idx in viewport_range {
+        for display_idx in viewport_range {
+            let Some(absolute_idx) = self.absolute_index_for_display_row(display_idx) else {
+                continue;
+            };
             let Some(commit) = self.graph_data.commits.get(absolute_idx) else {
                 continue;
             };
@@ -4499,7 +4566,7 @@ impl GitGraph {
                 continue;
             }
 
-            let visible_row_idx = absolute_idx - first_visible_row;
+            let visible_row_idx = display_idx - first_visible_row;
             let top = visible_row_idx as f32 * row_height - vertical_scroll_offset;
             let accent_color = accent_colors.color_for_index(commit.color_idx as u32);
             let ref_names = commit.data.ref_names.clone();
@@ -4567,6 +4634,15 @@ impl GitGraph {
             .children(elements)
     }
 
+    /// Commit index for a row as laid out on screen. Filter mode shows only
+    /// matching commits, so display rows and commit indices differ there.
+    fn absolute_index_for_display_row(&self, display_row: usize) -> Option<usize> {
+        match self.visible_indices() {
+            Some(indices) => indices.get(display_row).copied(),
+            None => (display_row < self.graph_data.commits.len()).then_some(display_row),
+        }
+    }
+
     fn row_at_position(
         &self,
         position_y: Pixels,
@@ -4582,14 +4658,43 @@ impl GitGraph {
         if local_y >= px(0.) && local_y < canvas_bounds.size.height {
             let absolute_y = local_y + scroll_offset_y;
             let row_height = Self::row_height(window, cx);
-            let absolute_row = (absolute_y / row_height).floor() as usize;
-
-            if absolute_row < self.graph_data.commits.len() {
-                return Some(absolute_row);
-            }
+            let display_row = (absolute_y / row_height).floor() as usize;
+            return self.absolute_index_for_display_row(display_row);
         }
 
         None
+    }
+
+    fn handle_graph_ref_drag_move(
+        &mut self,
+        event: &DragMoveEvent<DraggedGraphRef>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let target = if event.bounds.contains(&event.event.position) {
+            self.row_at_position(event.event.position.y, window, cx)
+        } else {
+            None
+        };
+        if self.drop_target_entry_idx != target {
+            self.drop_target_entry_idx = target;
+            cx.notify();
+        }
+    }
+
+    /// Branch chips moved into the gutter beside the graph, so the graph column
+    /// itself has to accept a branch dropped onto a commit's row.
+    fn handle_graph_ref_drop(
+        &mut self,
+        payload: &DraggedGraphRef,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.drop_target_entry_idx = None;
+        if let Some(row) = self.row_at_position(window.mouse_position().y, window, cx) {
+            self.handle_ref_drop_on_commit(row, payload.clone(), cx);
+        }
+        cx.notify();
     }
 
     fn handle_graph_mouse_move(
@@ -5585,6 +5690,9 @@ impl Render for GitGraph {
             self.search_state.state = QueryState::Empty;
             self.search(query, cx);
         }
+        if self.drop_target_entry_idx.is_some() && !cx.has_active_drag() {
+            self.drop_target_entry_idx = None;
+        }
         let (commit_count, is_loading) = self.commit_count_and_loading_state(cx);
 
         let error = self.get_repository(cx).and_then(|repo| {
@@ -5729,6 +5837,7 @@ impl Render for GitGraph {
                             let selected_entry_idx = self.selected_entry_idx;
                             let marked_entry_idxs = self.marked_entry_idxs.clone();
                             let hovered_entry_idx = self.hovered_entry_idx;
+                            let drop_target_entry_idx = self.drop_target_entry_idx;
                             let context_menu_target_index = self
                                 .context_menu
                                 .as_ref()
@@ -5776,6 +5885,7 @@ impl Render for GitGraph {
                                     let is_hovered = hovered_entry_idx == Some(index);
                                     let is_context_menu_target =
                                         context_menu_target_index == Some(index);
+                                    let is_drop_target = drop_target_entry_idx == Some(index);
                                     let table_focus_handle = table_focus_handle.clone();
                                     let is_focused = focus_handle.is_focused(window)
                                         || table_focus_handle.is_focused(window);
@@ -5819,13 +5929,27 @@ impl Render for GitGraph {
                                                 && !is_context_menu_target,
                                             |row| row.bg(hover_bg),
                                         )
+                                        .when(is_drop_target, |row| {
+                                            row.bg(cx.theme().colors().drop_target_background)
+                                        })
+                                        .debug_selector(|| format!("git-graph-row-{index}"))
                                         .when_some(row_sha, |row, sha| {
                                             row.on_drag(
                                                 DraggedGraphCommit {
                                                     sha: sha.to_string(),
                                                     repo_id: row_repo_id,
                                                 },
-                                                |_payload, _, _, cx| cx.new(|_| Empty),
+                                                |payload, _, _, cx| {
+                                                    cx.new(|_| GraphDragPreview {
+                                                        icon: IconName::GitCommit,
+                                                        label: payload
+                                                            .sha
+                                                            .get(..7)
+                                                            .unwrap_or(&payload.sha)
+                                                            .to_string()
+                                                            .into(),
+                                                    })
+                                                },
                                             )
                                         })
                                         .on_hover(move |&is_hovered, _, cx| {
@@ -5922,6 +6046,12 @@ impl Render for GitGraph {
                                                         .on_mouse_move(cx.listener(
                                                             Self::handle_graph_mouse_move,
                                                         ))
+                                                        .on_drag_move::<DraggedGraphRef>(
+                                                            cx.listener(Self::handle_graph_ref_drag_move),
+                                                        )
+                                                        .on_drop::<DraggedGraphRef>(
+                                                            cx.listener(Self::handle_graph_ref_drop),
+                                                        )
                                                         .on_click(
                                                             cx.listener(Self::handle_graph_click),
                                                         )
@@ -8423,6 +8553,159 @@ mod tests {
                 .collect::<Vec<_>>()
         });
         assert_eq!(reloaded_shas, vec![updated_head, updated_stash]);
+    }
+
+    struct DragTestGraph {
+        fs: Arc<FakeFs>,
+        git_graph: Entity<GitGraph>,
+        head: Oid,
+        older: Oid,
+    }
+
+    /// Two commits: `main` checked out on the newer one, `other` on the older.
+    async fn drag_test_graph(
+        cx: &mut TestAppContext,
+    ) -> (DragTestGraph, &mut gpui::VisualTestContext) {
+        init_test(cx);
+        let fs = FakeFs::new(cx.executor());
+        fs.insert_tree(
+            Path::new("/project"),
+            json!({ ".git": {}, "file.txt": "content" }),
+        )
+        .await;
+        let head = Oid::from_bytes(&[1; 20]).unwrap();
+        let older = Oid::from_bytes(&[2; 20]).unwrap();
+        fs.set_graph_commits(
+            Path::new("/project/.git"),
+            vec![
+                Arc::new(InitialGraphCommitData {
+                    sha: head,
+                    parents: smallvec![older],
+                    ref_names: vec!["HEAD -> main".into()],
+                }),
+                Arc::new(InitialGraphCommitData {
+                    sha: older,
+                    parents: smallvec![],
+                    ref_names: vec!["other".into()],
+                }),
+            ],
+        );
+        fs.set_branch_name(Path::new("/project/.git"), Some("main"));
+        let project = Project::test(fs.clone(), [Path::new("/project")], cx).await;
+        cx.run_until_parked();
+        let repository = project.read_with(cx, |project, cx| {
+            project
+                .active_repository(cx)
+                .expect("should have a repository")
+        });
+        let (multi_workspace, cx) = cx.add_window_view(|window, cx| {
+            workspace::MultiWorkspace::test_new(project.clone(), window, cx)
+        });
+        let workspace = multi_workspace.read_with(&*cx, |multi, _| multi.workspace().clone());
+        let git_graph = workspace.update_in(cx, |workspace, window, cx| {
+            let git_graph = cx.new(|cx| {
+                GitGraph::new(
+                    repository.read(cx).id,
+                    project.read(cx).git_store().clone(),
+                    workspace.weak_handle(),
+                    None,
+                    window,
+                    cx,
+                )
+            });
+            workspace.add_item_to_active_pane(Box::new(git_graph.clone()), None, true, window, cx);
+            git_graph
+        });
+        cx.run_until_parked();
+        (
+            DragTestGraph {
+                fs,
+                git_graph,
+                head,
+                older,
+            },
+            cx,
+        )
+    }
+
+    fn element_bounds(cx: &mut gpui::VisualTestContext, selector: &'static str) -> Bounds<Pixels> {
+        cx.debug_bounds(selector)
+            .unwrap_or_else(|| panic!("{selector} should be rendered"))
+    }
+
+    #[gpui::test]
+    async fn test_branch_dropped_on_commit_in_graph_gutter_moves_branch(cx: &mut TestAppContext) {
+        let (graph, cx) = drag_test_graph(cx).await;
+        let modifiers = gpui::Modifiers::default();
+
+        // Drag `other` up the gutter onto the newer commit's row, beside its
+        // `main` chip (dropping on the chip itself is a branch-on-branch rebase).
+        let chip = element_bounds(cx, "git-graph-ref-chip-other");
+        let main_chip = element_bounds(cx, "git-graph-ref-chip-main");
+        let target_row = element_bounds(cx, "git-graph-row-0");
+        let target = point(main_chip.right() + px(6.), target_row.center().y);
+        cx.simulate_mouse_down(chip.center(), MouseButton::Left, modifiers);
+        cx.simulate_mouse_move(
+            chip.center() + point(px(0.), px(-8.)),
+            MouseButton::Left,
+            modifiers,
+        );
+        cx.simulate_mouse_move(target, MouseButton::Left, modifiers);
+        assert!(
+            cx.update(|_, cx| cx.has_active_drag()),
+            "dragging a branch chip should start a drag"
+        );
+        cx.run_until_parked();
+        assert!(
+            cx.debug_bounds("git-graph-drag-preview").is_some(),
+            "the dragged branch should render a preview under the cursor"
+        );
+        graph.git_graph.read_with(&*cx, |git_graph, _| {
+            assert_eq!(
+                git_graph.drop_target_entry_idx,
+                Some(0),
+                "the row under the cursor should be highlighted as the drop target"
+            );
+        });
+
+        cx.simulate_mouse_up(target, MouseButton::Left, modifiers);
+        cx.run_until_parked();
+
+        graph.git_graph.read_with(&*cx, |git_graph, _| {
+            assert_eq!(git_graph.drop_target_entry_idx, None);
+        });
+        let other_tip = graph
+            .fs
+            .with_git_state(Path::new("/project/.git"), false, |state| {
+                state.refs.get("refs/heads/other").cloned()
+            })
+            .unwrap();
+        assert_eq!(other_tip, Some(graph.head.to_string()));
+    }
+
+    #[gpui::test]
+    async fn test_filter_mode_gutter_chips_follow_visible_rows(cx: &mut TestAppContext) {
+        let (graph, cx) = drag_test_graph(cx).await;
+
+        // Only the older commit matches, so it becomes the first visible row.
+        graph.git_graph.update(cx, |git_graph, cx| {
+            git_graph.search_state.matches.insert(graph.older);
+            git_graph.filter_mode = true;
+            git_graph.visible_indices.take();
+            cx.notify();
+        });
+        cx.run_until_parked();
+
+        let chip = element_bounds(cx, "git-graph-ref-chip-other");
+        let first_row = element_bounds(cx, "git-graph-row-1");
+        assert!(
+            first_row.top() <= chip.center().y && chip.center().y <= first_row.bottom(),
+            "the `other` chip should sit beside its commit's row in filter mode ({chip:?} vs {first_row:?})"
+        );
+        assert!(
+            cx.debug_bounds("git-graph-ref-chip-main").is_none(),
+            "a commit hidden by the filter should not keep a chip in the gutter"
+        );
     }
 
     #[gpui::test]

@@ -86,6 +86,7 @@ pub(crate) struct DraggedBranchView {
 impl Render for DraggedBranchView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         h_flex()
+            .debug_selector(|| "git-explorer-drag-preview".into())
             .bg(cx.theme().colors().background)
             .border_1()
             .border_color(cx.theme().colors().border)
@@ -982,6 +983,7 @@ impl super::GitPanel {
                 let indent = px(20.0 + (depth as f32) * 14.0);
                 h_flex()
                     .id(("git-explorer-row", row_ix))
+                    .debug_selector(|| format!("git-explorer-row-{label}"))
                     .w_full()
                     .relative()
                     .pl(indent)

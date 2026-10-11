@@ -6087,12 +6087,16 @@ mod tests {
         cx.update(|_window, cx| {
             prompt_history::push(
                 scope,
-                vec![acp_v2::ContentBlock::Text(acp_v2::TextContent::new("older"))],
+                vec![acp_v2::ContentBlock::Text(acp_v2::TextContent::new(
+                    "older",
+                ))],
                 cx,
             );
             prompt_history::push(
                 scope,
-                vec![acp_v2::ContentBlock::Text(acp_v2::TextContent::new("newer"))],
+                vec![acp_v2::ContentBlock::Text(acp_v2::TextContent::new(
+                    "newer",
+                ))],
                 cx,
             );
         });

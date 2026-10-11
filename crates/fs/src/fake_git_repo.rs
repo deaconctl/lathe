@@ -1926,11 +1926,14 @@ impl GitRepository for FakeGitRepository {
 
     fn branch_force_update(
         &self,
-        _name: String,
-        _commit: String,
+        name: String,
+        commit: String,
         _env: Arc<HashMap<String, String>>,
     ) -> BoxFuture<'_, Result<()>> {
-        async { bail!("branch_force_update not implemented for FakeGitRepository") }.boxed()
+        self.edit_ref(RefEdit::Update {
+            ref_name: format!("refs/heads/{name}"),
+            commit,
+        })
     }
 
     fn reflog(
