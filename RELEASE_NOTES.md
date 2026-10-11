@@ -2,6 +2,34 @@
 
 Most recent releases first. Beta releases (`-beta` suffix) ship as GitHub pre-releases and typically batch new features ahead of a stable cut.
 
+## v1.10.1-beta - 2026-10-10
+
+Fixes for things the last upstream sync broke. Some of them had been quietly broken since an earlier sync, too.
+
+### Fixed
+
+- **Dragging in the git graph works again.** Branch badges moved into the gutter beside the graph in 1.10.0, and dropping a branch there did nothing. Now you can drop it anywhere on a commit's row, and that row lights up while you drag. Both drags also show what you're dragging now, the branch name or the short commit hash.
+- In filter mode, branch badges in the graph lined up with the wrong commits.
+- **Cmd-+ and Cmd-- zoom the agent panel again.** With focus in the panel they did nothing at all. The panel and the thread text scale with the rest of the window now.
+- Agent file links like `main.rs:2` could open the file from the second folder of a multi-folder project instead of the first. Project folders also keep the order you added them in, instead of getting sorted alphabetically.
+- Searching the git graph by a full SHA-256 commit hash.
+- Commit diffs in shallow clones did a lot of extra work.
+- Git commands could mix up a revision and a file path with the same name.
+- Remote URLs weren't read correctly for partial clones.
+- Creating a worktree from a bare repository.
+- "Manage Skills" showed up in the command palette with AI turned off.
+
+### Changed
+
+- Project search runs as you type now, matching upstream. Set `"search_on_type": false` to go back to pressing Enter.
+
+### Known issues
+
+- Dragging a commit onto a branch only works for the branch you have checked out. Dropping it on any other branch is ignored.
+- Tested by hand on macOS. Windows and Linux untested.
+
+---
+
 ## v1.10.0-beta - 2026-10-08
 
 Synced with upstream Zed (225 commits), and the git graph finally caught up. It had quietly missed every upstream graph change since April. That's fixed, and Lathe's own graph features are all still there.
