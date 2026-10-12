@@ -2,6 +2,35 @@
 
 Most recent releases first. Beta releases (`-beta` suffix) ship as GitHub pre-releases and typically batch new features ahead of a stable cut.
 
+## v1.11.0-beta - 2026-10-12
+
+Lathe finally has its own settings and data folders. Up to now it quietly shared them with stock Zed, and that turned out to break both apps. Your stuff comes along automatically on first launch.
+
+### New
+
+- **Lathe keeps its own data.** Settings, keymaps, themes, extensions, history and accounts now live in Lathe's own folders (`~/.config/lathe` and `~/Library/Application Support/Lathe` on macOS, the `lathe` equivalents on Linux and Windows). First launch copies everything over from Zed's folders. Takes about a second, and you shouldn't need to sign in to anything again. If an account's sign-in can't be carried over, Lathe tells you which one.
+- **Open Recent File.** It's next to Open Recent Project in the File menu and on the welcome page (`alt-cmd-shift-o` on macOS). Picking a file opens just that file, not its whole project.
+- **Linux AppImage.** Each release now has an `.AppImage` for x86_64 and aarch64. `chmod +x` it and run it. No libfuse2 needed, and in-app updates replace the file in place.
+
+### Fixed
+
+- **Stock Zed's "Failed to load the database file" error.** Recent Zed versions refused the database Lathe shared with them and ran without saving any history. On first launch Lathe repairs Zed's copy, after backing it up next to the original (`db.sqlite.before-lathe-repair`). Restart Zed afterward and your recent projects are back.
+- Lathe and Zed kept deleting each other's language server and debug adapter downloads.
+- On Linux, Lathe wouldn't start while Zed was running, and the `lathe` command opened files in Zed.
+- Windows builds called themselves "Zed" in file properties. Beta showed up as "Zed Dev" with the dev icon.
+
+### Improved
+
+- Long agent threads open faster. Edit diffs and message formatting get built when you scroll to them, not all up front.
+
+### Known issues
+
+- After this, changes in Lathe and Zed don't show up in each other. That's the point, but worth knowing if you use both.
+- AI accounts you added before this release still keep their files in Zed's folder. They work fine there; new ones go in Lathe's.
+- Tested by hand on macOS. The Windows credential copy and the AppImage haven't been tried on real machines yet.
+
+---
+
 ## v1.10.1-beta - 2026-10-10
 
 Fixes for things the last upstream sync broke. Some of them had been quietly broken since an earlier sync, too.
