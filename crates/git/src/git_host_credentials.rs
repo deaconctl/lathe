@@ -171,7 +171,7 @@ struct AccountIndex {
 }
 
 fn index_path() -> PathBuf {
-    paths::config_dir().join("git_host_accounts.json")
+    paths::account_indexes_dir().join("git_host_accounts.json")
 }
 
 fn load_index() -> AccountIndex {

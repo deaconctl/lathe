@@ -59,7 +59,7 @@ impl CollabAccountsIndex {
 }
 
 fn accounts_path() -> PathBuf {
-    paths::config_dir().join("collab_accounts.json")
+    paths::account_indexes_dir().join("collab_accounts.json")
 }
 
 /// The parsed index, keyed by the file's modification time. The title bar reads

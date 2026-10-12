@@ -14966,6 +14966,7 @@ dependencies = [
  "editor",
  "extension",
  "extension_host",
+ "file_icons",
  "fs",
  "futures 0.3.34",
  "fuzzy_nucleo",

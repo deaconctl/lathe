@@ -1,5 +1,6 @@
 mod dev_container_suggest;
 pub mod disconnected_overlay;
+mod recent_files;
 mod remote_connections;
 mod remote_servers;
 pub mod sidebar_recent_projects;
@@ -50,7 +51,7 @@ use workspace::{
     SerializedWorkspaceLocation, Workspace, WorkspaceDb, WorkspaceId,
     notifications::DetachAndPromptErr, with_active_or_new_workspace,
 };
-use zed_actions::{OpenDevContainer, OpenRecent, OpenRemote};
+use zed_actions::{OpenDevContainer, OpenRecent, OpenRecentFile, OpenRemote};
 
 actions!(
     recent_projects,
@@ -286,6 +287,12 @@ pub(crate) fn default_open_in_new_window(cx: &App) -> bool {
 
 pub fn init(cx: &mut App) {
     workspace_groups::init(cx);
+
+    cx.on_action(|_: &OpenRecentFile, cx| {
+        with_active_or_new_workspace(cx, |workspace, window, cx| {
+            recent_files::RecentFiles::toggle(workspace, window, cx);
+        });
+    });
 
     #[cfg(target_os = "windows")]
     cx.on_action(|open_wsl: &zed_actions::wsl_actions::OpenFolderInWsl, cx| {

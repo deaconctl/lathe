@@ -176,6 +176,26 @@ pub fn node_dir() -> &'static PathBuf {
     })
 }
 
+/// Returns the directory holding Lathe's account indexes (collab, AI and git
+/// host accounts).
+///
+/// Test builds get a scratch directory per test process instead. Tests sign
+/// in fake users, and writing those to the real config directory put them in
+/// the user's account menus.
+pub fn account_indexes_dir() -> &'static PathBuf {
+    #[cfg(any(test, feature = "test-support"))]
+    {
+        static TEST_ACCOUNT_INDEXES_DIR: OnceLock<PathBuf> = OnceLock::new();
+        TEST_ACCOUNT_INDEXES_DIR.get_or_init(|| {
+            env::temp_dir().join(format!("lathe-test-accounts-{}", std::process::id()))
+        })
+    }
+    #[cfg(not(any(test, feature = "test-support")))]
+    {
+        config_dir()
+    }
+}
+
 /// Returns the path to the configuration directory used by Zed.
 pub fn config_dir() -> &'static PathBuf {
     CONFIG_DIR.get_or_init(|| {
@@ -692,4 +712,15 @@ pub fn global_gitignore_path() -> Option<PathBuf> {
     GLOBAL_GITIGNORE_PATH
         .get_or_init(::ignore::gitignore::gitconfig_excludes_path)
         .clone()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_account_indexes_stay_out_of_config_dir_in_tests() {
+        assert_ne!(account_indexes_dir(), config_dir());
+        assert!(account_indexes_dir().starts_with(env::temp_dir()));
+    }
 }

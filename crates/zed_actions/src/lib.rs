@@ -738,6 +738,12 @@ pub struct OpenRecent {
     pub create_new_window: Option<bool>,
 }
 
+/// Opens the recent files interface. A chosen file opens on its own, without its project.
+#[derive(PartialEq, Clone, Deserialize, Default, JsonSchema, Action)]
+#[action(namespace = projects)]
+#[serde(deny_unknown_fields)]
+pub struct OpenRecentFile;
+
 /// Creates a project from a selected template.
 #[derive(PartialEq, Clone, Deserialize, Default, JsonSchema, Action)]
 #[action(namespace = projects)]

@@ -17,6 +17,7 @@ pub mod path_list {
 pub mod path_link;
 mod persistence;
 pub mod portable_workspace;
+pub mod recent_files;
 pub mod searchable;
 pub mod binary_download_modal;
 pub mod security_modal;
@@ -7090,6 +7091,18 @@ impl Workspace {
             git_store_entity.update(cx, |git_store, cx| {
                 git_store.set_active_repo_for_path(project_path, cx);
             });
+        }
+
+        if active_project_path_changed
+            && !self.restoring_workspace
+            && let Some(project_path) = &active_entry
+            && self.project.read(cx).is_local()
+            && self
+                .active_item(cx)
+                .is_some_and(|item| item.buffer_kind(cx) == ItemBufferKind::Singleton)
+            && let Some(abs_path) = self.project.read(cx).absolute_path(project_path, cx)
+        {
+            recent_files::record_recent_file(abs_path, cx);
         }
 
         if active_project_path_changed {

@@ -147,7 +147,7 @@ impl AiAccountsIndex {
 }
 
 fn accounts_path() -> PathBuf {
-    paths::config_dir().join("ai_accounts.json")
+    paths::account_indexes_dir().join("ai_accounts.json")
 }
 
 /// The parsed index, keyed by the file's modification time. The agent panel's

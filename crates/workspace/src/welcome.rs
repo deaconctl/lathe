@@ -3,6 +3,7 @@ use crate::{
     ToggleWorkspaceSidebar, Workspace, WorkspaceSettings,
     item::{Item, ItemEvent},
     persistence::WorkspaceDb,
+    recent_files::RecentFilesDb,
 };
 use agent_settings::AgentSettings;
 use git::Clone as GitClone;
@@ -16,6 +17,7 @@ use menu::{SelectNext, SelectPrevious};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use settings::{DefaultOpenBehavior, Settings};
+use std::path::{Path, PathBuf};
 use ui::{
     ButtonLike, Divider, DividerColor, KeyBinding, StatefulInteractiveElement, prelude::*,
 };
@@ -28,6 +30,14 @@ use zed_actions::{
 #[action(namespace = welcome)]
 #[serde(transparent)]
 pub struct OpenRecentProject {
+    pub index: usize,
+}
+
+/// Opens one of the recent files listed on the welcome page, on its own.
+#[derive(PartialEq, Clone, Debug, Deserialize, Serialize, JsonSchema, Action)]
+#[action(namespace = welcome)]
+#[serde(transparent)]
+pub struct OpenRecentFileEntry {
     pub index: usize,
 }
 
@@ -244,6 +254,7 @@ pub struct WelcomePage {
     focus_handle: FocusHandle,
     fallback_to_recent_projects: bool,
     recent_workspaces: Option<Vec<RecentWorkspace>>,
+    recent_files: Vec<PathBuf>,
     scroll_handle: ScrollHandle,
 }
 
@@ -263,6 +274,7 @@ impl WelcomePage {
                 .upgrade()
                 .map(|ws| ws.read(cx).app_state().fs.clone());
             let db = WorkspaceDb::global(cx);
+            let recent_files_db = RecentFilesDb::global(cx);
             cx.spawn_in(window, async move |this: WeakEntity<Self>, cx| {
                 let Some(fs) = fs else { return };
                 let workspaces = db
@@ -270,9 +282,15 @@ impl WelcomePage {
                     .await
                     .log_err()
                     .unwrap_or_default();
+                let recent_files = recent_files_db
+                    .recent_files(fs)
+                    .await
+                    .log_err()
+                    .unwrap_or_default();
 
                 this.update(cx, |this, cx| {
                     this.recent_workspaces = Some(workspaces);
+                    this.recent_files = recent_files;
                     cx.notify();
                 })
                 .ok();
@@ -285,6 +303,7 @@ impl WelcomePage {
             focus_handle,
             fallback_to_recent_projects,
             recent_workspaces: None,
+            recent_files: Vec::new(),
             scroll_handle: ScrollHandle::new(),
         }
     }
@@ -328,6 +347,26 @@ impl WelcomePage {
                 }
             }
         }
+    }
+
+    fn open_recent_file(
+        &mut self,
+        action: &OpenRecentFileEntry,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(path) = self.recent_files.get(action.index).cloned() else {
+            return;
+        };
+        // Opening just the file gives it a window of its own; an empty window
+        // (the usual home of this page) is reused rather than left behind.
+        self.workspace
+            .update(cx, |workspace, cx| {
+                workspace
+                    .open_workspace_for_paths(OpenMode::NewWindow, vec![path], window, cx)
+                    .detach_and_log_err(cx);
+            })
+            .log_err();
     }
 
     fn render_agent_card(&self, tab_index: usize, cx: &mut Context<Self>) -> impl IntoElement {
@@ -389,6 +428,28 @@ impl WelcomePage {
             .children(recent_projects)
     }
 
+    fn render_recent_file_section(&self, recent_files: Vec<impl IntoElement>) -> impl IntoElement {
+        v_flex()
+            .w_full()
+            .child(SectionHeader::new("Recent Files"))
+            .children(recent_files)
+    }
+
+    fn render_recent_file(
+        &self,
+        file_index: usize,
+        tab_index: usize,
+        path: &Path,
+    ) -> impl IntoElement {
+        SectionButton::new(
+            recent_file_label(path),
+            IconName::File,
+            &OpenRecentFileEntry { index: file_index },
+            tab_index,
+            self.focus_handle.clone(),
+        )
+    }
+
     fn render_recent_project(
         &self,
         project_index: usize,
@@ -440,6 +501,18 @@ impl Render for WelcomePage {
             })
             .collect::<Vec<_>>();
 
+        let recent_file_tab_start = first_section_entries + recent_projects.len();
+        let recent_files = self
+            .recent_files
+            .iter()
+            .take(5)
+            .enumerate()
+            .map(|(index, path)| {
+                self.render_recent_file(index, recent_file_tab_start + index, path)
+            })
+            .collect::<Vec<_>>();
+        let showing_recent_files = self.fallback_to_recent_projects && !recent_files.is_empty();
+
         let showing_recent_projects =
             self.fallback_to_recent_projects && !recent_projects.is_empty();
         let second_section = if showing_recent_projects {
@@ -463,6 +536,7 @@ impl Render for WelcomePage {
             .on_action(cx.listener(Self::select_previous))
             .on_action(cx.listener(Self::select_next))
             .on_action(cx.listener(Self::open_recent_project))
+            .on_action(cx.listener(Self::open_recent_file))
             .size_full()
             .bg(cx.theme().colors().editor_background)
             .justify_center()
@@ -497,6 +571,9 @@ impl Render for WelcomePage {
                             )
                             .child(first_section.render(Default::default(), &self.focus_handle))
                             .child(second_section)
+                            .when(showing_recent_files, |this| {
+                                this.child(self.render_recent_file_section(recent_files))
+                            })
                             .when(ai_enabled && !showing_recent_projects, |this| {
                                 let agent_tab_index = next_tab_index;
                                 next_tab_index += 1;
@@ -661,6 +738,22 @@ mod persistence {
     }
 }
 
+/// The file name, with its folder in parentheses so same-named files can be told apart.
+fn recent_file_label(path: &Path) -> String {
+    let file_name = path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.to_string_lossy().into_owned());
+    match path
+        .parent()
+        .and_then(|parent| parent.file_name())
+        .map(|name| name.to_string_lossy())
+    {
+        Some(folder) => format!("{file_name} ({folder})"),
+        None => file_name,
+    }
+}
+
 fn project_name(paths: &PathList) -> String {
     let joined = paths
         .paths()
@@ -678,6 +771,15 @@ fn project_name(paths: &PathList) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_recent_file_label_includes_folder() {
+        assert_eq!(
+            recent_file_label(Path::new("/home/user/app/src/main.rs")),
+            "main.rs (src)"
+        );
+        assert_eq!(recent_file_label(Path::new("/main.rs")), "main.rs");
+    }
 
     #[test]
     fn test_project_name_empty() {
