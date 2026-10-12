@@ -773,12 +773,14 @@ impl AutoUpdater {
         let client = this.read_with(cx, |this, _| this.client.clone());
 
         if let Some(api_url) = lathe_update_base_url(release_channel) {
+            let prefer_appimage = asset == "zed" && util::running_appimage().is_some();
             return lathe_update::get_release_asset(
                 client.http_client(),
                 &api_url,
                 release_channel,
                 os,
                 arch,
+                prefer_appimage,
             )
             .await;
         }
@@ -1013,7 +1015,7 @@ impl AutoUpdater {
 
     fn check_dependencies() -> Result<()> {
         #[cfg(target_os = "linux")]
-        if which::which("rsync").is_err() {
+        if util::running_appimage().is_none() && which::which("rsync").is_err() {
             let install_hint = linux_rsync_install_hint();
             return Err(MissingDependencyError(format!(
                 "rsync is required for auto-updates but is not installed. {install_hint}"
@@ -1033,6 +1035,7 @@ impl AutoUpdater {
     async fn target_path(installer_dir: &InstallerDir) -> Result<PathBuf> {
         let filename = match OS {
             "macos" => anyhow::Ok("Zed.dmg"),
+            "linux" if util::running_appimage().is_some() => Ok("zed.AppImage"),
             "linux" => Ok("zed.tar.gz"),
             "windows" => Ok("Zed.exe"),
             unsupported_os => anyhow::bail!("not supported: {unsupported_os}"),
@@ -1060,7 +1063,12 @@ impl AutoUpdater {
                 .await
             }
             "linux" => {
-                install_release_linux(&installer_dir, &target_path, channel, running_app_path).await
+                if let Some(appimage_path) = util::running_appimage() {
+                    install_release_appimage(&target_path, &appimage_path).await
+                } else {
+                    install_release_linux(&installer_dir, &target_path, channel, running_app_path)
+                        .await
+                }
             }
             "windows" => install_release_windows(&target_path).await,
             unsupported_os => anyhow::bail!("not supported: {unsupported_os}"),
@@ -1272,22 +1280,22 @@ async fn install_release_linux(
     } else {
         String::default()
     };
-    let app_folder_name = format!("zed{}.app", suffix);
+    let app_folder_name = format!("lathe{}.app", suffix);
+    let to = linux_install_dir(&running_app_path, &suffix, &home_dir);
+    // Older rsync releases can't create missing parent directories.
+    fs::create_dir_all(&to)
+        .await
+        .with_context(|| format!("failed to create install directory {to:?}"))?;
 
-    let from = extracted.join(&app_folder_name);
-    let mut to = home_dir.join(".local");
-
-    let expected_suffix = format!("{}/libexec/zed-editor", app_folder_name);
-
-    if let Some(prefix) = running_app_path
-        .to_str()
-        .and_then(|str| str.strip_suffix(&expected_suffix))
-    {
-        to = PathBuf::from(prefix);
-    }
+    // Trailing slashes sync the bundle's contents rather than nesting the
+    // lathe{suffix}.app folder inside the install dir.
+    let mut from = extracted.join(&app_folder_name).into_os_string();
+    from.push("/");
+    let mut to_contents = to.clone().into_os_string();
+    to_contents.push("/");
 
     let mut cmd = new_command("rsync");
-    cmd.args(["-av", "--delete"]).arg(&from).arg(&to);
+    cmd.args(["-av", "--delete"]).arg(&from).arg(&to_contents);
     let output = cmd
         .output()
         .await
@@ -1295,13 +1303,89 @@ async fn install_release_linux(
 
     anyhow::ensure!(
         output.status.success(),
-        "failed to copy Zed update from {:?} to {:?}: {:?}",
+        "failed to copy Lathe update from {:?} to {:?}: {:?}",
         from,
         to,
         String::from_utf8_lossy(&output.stderr)
     );
 
-    Ok(Some(to.join(expected_suffix)))
+    Ok(Some(to.join(LINUX_EDITOR_BINARY)))
+}
+
+const LINUX_EDITOR_BINARY: &str = "libexec/lathe-editor";
+
+/// script/install-fork-linux flattens the bundle into
+/// ~/.local/share/lathe{suffix}, while a hand-extracted tarball keeps the
+/// lathe{suffix}.app folder. Update whichever one is running, but only when
+/// the folder name proves it belongs to Lathe: rsync --delete into a shared
+/// prefix like /usr/local would wipe everything else in it.
+fn linux_install_dir(running_app_path: &Path, suffix: &str, home_dir: &Path) -> PathBuf {
+    let app_folder_name = format!("lathe{suffix}.app");
+    let installed_folder_name = format!("lathe{suffix}");
+    running_app_path
+        .ends_with(LINUX_EDITOR_BINARY)
+        .then(|| running_app_path.parent()?.parent())
+        .flatten()
+        .filter(|dir| {
+            dir.file_name().is_some_and(|name| {
+                name == app_folder_name.as_str() || name == installed_folder_name.as_str()
+            })
+        })
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| {
+            home_dir
+                .join(".local")
+                .join("share")
+                .join(installed_folder_name)
+        })
+}
+
+async fn install_release_appimage(
+    downloaded_appimage: &Path,
+    appimage_path: &Path,
+) -> Result<Option<PathBuf>> {
+    use util::ResultExt as _;
+
+    // Stage beside the running image so the final rename stays on one
+    // filesystem and is atomic. Replacing the file is safe while it runs: the
+    // runtime keeps the old inode mounted until this process exits. The path
+    // itself is kept, even if it has the old version in its name, because
+    // desktop entries and launchers point at it.
+    let file_name = appimage_path
+        .file_name()
+        .with_context(|| format!("invalid AppImage path {appimage_path:?}"))?;
+    let mut staged_name = OsString::from(".");
+    staged_name.push(file_name);
+    staged_name.push(".update");
+    let staged_path = appimage_path.with_file_name(staged_name);
+
+    let replace_result = async {
+        fs::copy(downloaded_appimage, &staged_path)
+            .await
+            .with_context(|| {
+                format!(
+                    "failed to stage update next to {appimage_path:?}; is its directory writable?"
+                )
+            })?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            fs::set_permissions(&staged_path, std::fs::Permissions::from_mode(0o755))
+                .await
+                .context("failed to mark AppImage update executable")?;
+        }
+        fs::rename(&staged_path, appimage_path)
+            .await
+            .with_context(|| format!("failed to replace {appimage_path:?}"))
+    }
+    .await;
+
+    if replace_result.is_err() && fs::metadata(&staged_path).await.is_ok() {
+        fs::remove_file(&staged_path).await.log_err();
+    }
+    replace_result?;
+
+    Ok(Some(appimage_path.to_path_buf()))
 }
 
 async fn install_release_macos(
@@ -2083,5 +2167,78 @@ mod tests {
             newer_version.unwrap(),
             Some(fetched_version.parse().unwrap())
         );
+    }
+
+    #[test]
+    fn test_linux_install_dir_updates_the_running_lathe_install() {
+        let home = Path::new("/home/user");
+
+        assert_eq!(
+            linux_install_dir(
+                Path::new("/home/user/.local/share/lathe-beta/libexec/lathe-editor"),
+                "-beta",
+                home,
+            ),
+            PathBuf::from("/home/user/.local/share/lathe-beta")
+        );
+        assert_eq!(
+            linux_install_dir(
+                Path::new("/home/user/apps/lathe.app/libexec/lathe-editor"),
+                "",
+                home,
+            ),
+            PathBuf::from("/home/user/apps/lathe.app")
+        );
+    }
+
+    #[test]
+    fn test_install_release_appimage_replaces_the_running_file() {
+        let dir = tempdir().unwrap();
+        let appimage_path = dir.path().join("Lathe-1.0.0-x86_64-linux.AppImage");
+        let downloaded = dir.path().join("download");
+        std::fs::write(&appimage_path, "old").unwrap();
+        std::fs::write(&downloaded, "new").unwrap();
+
+        let restart_path =
+            smol::block_on(install_release_appimage(&downloaded, &appimage_path)).unwrap();
+
+        assert_eq!(restart_path, Some(appimage_path.clone()));
+        assert_eq!(std::fs::read_to_string(&appimage_path).unwrap(), "new");
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            let mode = std::fs::metadata(&appimage_path)
+                .unwrap()
+                .permissions()
+                .mode();
+            assert_eq!(mode & 0o777, 0o755);
+        }
+        let mut entries = std::fs::read_dir(dir.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name())
+            .collect::<Vec<_>>();
+        entries.sort();
+        assert_eq!(
+            entries,
+            ["Lathe-1.0.0-x86_64-linux.AppImage", "download"].map(OsString::from)
+        );
+    }
+
+    #[test]
+    fn test_linux_install_dir_never_targets_an_unrecognized_directory() {
+        let home = Path::new("/home/user");
+        let fallback = PathBuf::from("/home/user/.local/share/lathe-beta");
+
+        for running_app_path in [
+            "/usr/local/libexec/lathe-editor",
+            "/home/user/.local/share/lathe/libexec/lathe-editor",
+            "/home/user/lathe-beta/target/release/zed",
+        ] {
+            assert_eq!(
+                linux_install_dir(Path::new(running_app_path), "-beta", home),
+                fallback,
+                "{running_app_path}"
+            );
+        }
     }
 }

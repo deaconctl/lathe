@@ -349,6 +349,20 @@ pub fn get_shell_safe_zed_path(shell_kind: shell::ShellKind) -> anyhow::Result<S
         .context("Failed to shell-escape Zed executable path.")
 }
 
+/// The `.AppImage` file this process was launched from, if any.
+pub fn running_appimage() -> Option<PathBuf> {
+    // The AppImage runtime exports APPIMAGE and APPDIR, and every child
+    // process inherits them, so a tarball install started from inside some
+    // AppImage would also see them. Only trust them when this executable
+    // actually lives inside the mounted image.
+    let appimage = std::env::var_os("APPIMAGE")?;
+    let appdir = std::env::var_os("APPDIR")?;
+    let current_exe = std::env::current_exe().ok()?;
+    current_exe
+        .starts_with(&appdir)
+        .then(|| PathBuf::from(appimage))
+}
+
 /// Returns a path for the zed cli executable, this function
 /// should be called from the zed executable, not zed-cli.
 pub fn get_zed_cli_path() -> Result<PathBuf> {

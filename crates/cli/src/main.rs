@@ -956,7 +956,11 @@ mod linux {
             ));
             let sock = UnixDatagram::unbound()?;
             if sock.connect(&sock_path).is_err() {
-                self.boot_background(ipc_url, user_data_dir)?;
+                if util::running_appimage().is_some() {
+                    self.run_attached(ipc_url, user_data_dir)?;
+                } else {
+                    self.boot_background(ipc_url, user_data_dir)?;
+                }
             } else {
                 sock.send(ipc_url.as_bytes())?;
             }
@@ -1013,6 +1017,24 @@ mod linux {
                 }
                 Err(_) => Err(anyhow!(io::Error::last_os_error())),
             }
+        }
+
+        /// Runs the editor as a child and exits with its status. The AppImage
+        /// runtime unmounts the image once this process exits, so detaching
+        /// like `boot_background` would pull the editor's files out from
+        /// under it.
+        fn run_attached(&self, ipc_url: String, user_data_dir: Option<&str>) -> anyhow::Result<()> {
+            let mut cmd = std::process::Command::new(&self.0);
+            cmd.arg(ipc_url).env(FORCE_CLI_MODE_ENV_VAR_NAME, "");
+            if let Some(dir) = user_data_dir {
+                cmd.arg("--user-data-dir").arg(dir);
+            }
+            let status = cmd
+                .status()
+                .with_context(|| format!("failed to run {:?}", self.0))?;
+            // Exit here rather than returning: if the editor died before the
+            // handshake, the caller would block forever waiting for it.
+            process::exit(status.code().unwrap_or(1))
         }
 
         fn wait_for_socket(

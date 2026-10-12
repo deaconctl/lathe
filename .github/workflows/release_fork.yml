@@ -350,8 +350,39 @@ jobs:
           ZED_COMMIT_SHA: ${{ github.sha }}
         run: script/build-fork-linux
 
+      - name: Install appimagetool
+        # Pinned tool and runtime so a release doesn't silently change with
+        # upstream's "continuous" builds. The static type2 runtime means
+        # users don't need libfuse2 installed to launch the AppImage.
+        shell: bash
+        run: |
+          machine_arch="$(uname -m)"
+          apt-get install -y file
+          wget -qO /opt/appimagetool "https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-${machine_arch}.AppImage"
+          wget -qO /opt/appimage-runtime "https://github.com/AppImage/type2-runtime/releases/download/20251108/runtime-${machine_arch}"
+          chmod +x /opt/appimagetool
+          echo "APPIMAGETOOL=/opt/appimagetool" >> "$GITHUB_ENV"
+          echo "APPIMAGE_RUNTIME=/opt/appimage-runtime" >> "$GITHUB_ENV"
+
       - name: Package
         run: script/package-fork-linux
+
+      - name: Smoke-test AppImage
+        # --appimage-extract runs the embedded runtime without FUSE, which
+        # proves the image is well-formed; `AppRun --version` then exercises
+        # the cli's editor discovery from inside the image.
+        shell: bash
+        env:
+          ZED_ALLOW_ROOT: "true"
+        run: |
+          appimage=$(ls target/release/Lathe-*-linux.AppImage)
+          mkdir -p "$RUNNER_TEMP/appimage"
+          cd "$RUNNER_TEMP/appimage"
+          "$GITHUB_WORKSPACE/$appimage" --appimage-extract >/dev/null
+          test -x squashfs-root/AppRun
+          test -x squashfs-root/bin/lathe
+          test -x squashfs-root/libexec/lathe-editor
+          squashfs-root/AppRun --version
 
       - name: Smoke-test CLI editor discovery
         # `lathe --version` exercises the cli's editor-binary probing (the
@@ -370,7 +401,9 @@ jobs:
         uses: actions/upload-artifact@v5
         with:
           name: lathe-linux-${{ matrix.arch }}
-          path: target/release/Lathe-*-linux.tar.gz
+          path: |
+            target/release/Lathe-*-linux.tar.gz
+            target/release/Lathe-*-linux.AppImage
           if-no-files-found: error
 
   build-windows:
@@ -537,12 +570,19 @@ jobs:
           cp artifacts/lathe-macos/Lathe-*.zip release-files/
           cp artifacts/lathe-macos/Lathe-*.dmg release-files/
           cp artifacts/lathe-linux-x86_64/Lathe-*-linux.tar.gz release-files/
+          cp artifacts/lathe-linux-x86_64/Lathe-*-linux.AppImage release-files/
           shopt -s nullglob
           linux_aarch64_tar=(artifacts/lathe-linux-aarch64/Lathe-*-linux.tar.gz)
+          linux_aarch64_appimage=(artifacts/lathe-linux-aarch64/Lathe-*-linux.AppImage)
           if [ ${#linux_aarch64_tar[@]} -gt 0 ]; then
             cp "${linux_aarch64_tar[@]}" release-files/
           else
             echo "::warning::Linux aarch64 tarball was not produced; continuing without it"
+          fi
+          if [ ${#linux_aarch64_appimage[@]} -gt 0 ]; then
+            cp "${linux_aarch64_appimage[@]}" release-files/
+          else
+            echo "::warning::Linux aarch64 AppImage was not produced; continuing without it"
           fi
           shopt -u nullglob
           cp artifacts/lathe-windows-x86_64/Lathe-*-x86_64-windows.zip release-files/

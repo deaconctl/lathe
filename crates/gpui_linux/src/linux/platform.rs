@@ -984,8 +984,16 @@ impl Platform for LinuxPlatform {
     }
 
     fn app_path(&self) -> Result<PathBuf> {
-        // get the path of the executable of the current process
         let app_path = env::current_exe()?;
+        // Inside an AppImage the executable lives in a temporary mount that
+        // disappears when the process exits, so a restart has to relaunch the
+        // .AppImage file itself. APPIMAGE/APPDIR are inherited by child
+        // processes, hence the check that this executable is really inside it.
+        if let (Some(appimage), Some(appdir)) = (env::var_os("APPIMAGE"), env::var_os("APPDIR"))
+            && app_path.starts_with(&appdir)
+        {
+            return Ok(PathBuf::from(appimage));
+        }
         Ok(app_path)
     }
 

@@ -194,6 +194,7 @@ pub async fn get_release_asset(
     channel: ReleaseChannel,
     os: &str,
     arch: &str,
+    prefer_appimage: bool,
 ) -> Result<ReleaseAsset> {
     let releases = get_releases(http_client, api_url).await?;
     let release = releases
@@ -203,10 +204,12 @@ pub async fn get_release_asset(
 
     // Asset naming produced by the release workflow:
     //   macOS:   Lathe-<version>-<arch>-macos.{dmg,zip}    (arch: aarch64 | x86_64)
-    //   Linux:   Lathe-<version>-<arch>-linux.tar.gz
+    //   Linux:   Lathe-<version>-<arch>-linux.{tar.gz,AppImage}
     //   Windows: Lathe-<version>-<arch>.exe
     // macOS prefers .dmg when available (used by the in-app installer's
-    // hdiutil mount flow); .zip is accepted as a fallback.
+    // hdiutil mount flow); .zip is accepted as a fallback. Linux AppImage
+    // installs never fall back to the tarball, since installing it would
+    // leave a second copy alongside the AppImage being run.
     let matches = |asset: &GitHubAsset, ext: &str| {
         asset.name.ends_with(ext)
             && asset.name.contains(arch)
@@ -219,6 +222,11 @@ pub async fn get_release_asset(
             .iter()
             .find(|a| matches(a, ".dmg"))
             .or_else(|| release.assets.iter().find(|a| matches(a, ".zip")))
+            .cloned(),
+        "linux" if prefer_appimage => release
+            .assets
+            .iter()
+            .find(|a| matches(a, ".AppImage"))
             .cloned(),
         "linux" => release
             .assets

@@ -145,9 +145,53 @@ mkdir -p "$out_dir"
 echo "--- Creating archive ---"
 tar -czvf "${out_dir}/${archive_name}" -C "$temp_dir" "lathe${suffix}.app"
 
+# AppImage (optional): built when appimagetool is available, which CI
+# provides via APPIMAGETOOL. APPIMAGE_RUNTIME pins the runtime so the build
+# doesn't fetch whatever "continuous" runtime is current.
+appimagetool="${APPIMAGETOOL:-appimagetool}"
+appimage_name="Lathe-${version}-${arch}-linux.AppImage"
+if command -v "$appimagetool" &>/dev/null; then
+    echo "--- Creating AppImage ---"
+    appimage_dir="${temp_dir}/Lathe.AppDir"
+    cp -a "$app_dir" "$appimage_dir"
+
+    # Go through the cli, not the editor binary: only the cli hands paths to
+    # an already-running instance. Inside an AppImage the cli keeps the
+    # editor attached instead of detaching it, since the runtime unmounts the
+    # image as soon as AppRun's process ends.
+    cat > "${appimage_dir}/AppRun" <<'EOF'
+#!/bin/sh
+here="$(dirname "$(readlink -f "$0")")"
+exec "${here}/bin/lathe" "$@"
+EOF
+    chmod +x "${appimage_dir}/AppRun"
+
+    # appimagetool wants the desktop entry and icon at the AppDir root.
+    # TryExec is dropped because `lathe` isn't on PATH for AppImage users,
+    # which would hide the entry once an integration tool installs it.
+    sed -e '/^TryExec=/d' \
+        "${app_dir}/share/applications/${app_id}.desktop" > "${appimage_dir}/${app_id}.desktop"
+    cp "${app_dir}/share/icons/hicolor/512x512/apps/lathe.png" "${appimage_dir}/lathe.png"
+    ln -s lathe.png "${appimage_dir}/.DirIcon"
+
+    runtime_args=()
+    if [ -n "${APPIMAGE_RUNTIME:-}" ]; then
+        runtime_args=(--runtime-file "$APPIMAGE_RUNTIME")
+    fi
+    # Extract-and-run so appimagetool (itself an AppImage) works in
+    # containers without FUSE.
+    APPIMAGE_EXTRACT_AND_RUN=1 ARCH="$arch" \
+        "$appimagetool" --no-appstream "${runtime_args[@]}" "$appimage_dir" "${out_dir}/${appimage_name}"
+else
+    echo "--- Skipping AppImage (appimagetool not found) ---"
+fi
+
 echo ""
 echo "=== Package created ==="
 echo "  ${out_dir}/${archive_name}"
+if [ -f "${out_dir}/${appimage_name}" ]; then
+    echo "  ${out_dir}/${appimage_name}"
+fi
 echo ""
 echo "To create a GitHub release:"
 echo "  gh release create v${version} \"${out_dir}/${archive_name}\" --title \"Lathe v${version}\" --notes \"Release v${version}\""

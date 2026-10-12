@@ -526,6 +526,13 @@ fn push_bind(args: &mut Vec<String>, flag: &str, source: &str, destination: &str
     args.push(destination.to_string());
 }
 
+fn appimage_mount_for(bridge_program: &str, appdir: Option<OsString>) -> Option<String> {
+    let appdir = appdir?.into_string().ok()?;
+    Path::new(bridge_program)
+        .starts_with(&appdir)
+        .then_some(appdir)
+}
+
 fn resolve_bwrap() -> std::result::Result<PathBuf, LauncherStatus> {
     match locate_bwrap() {
         BwrapLocation::Found(path) => Ok(path),
@@ -645,6 +652,12 @@ pub fn wrap_invocation(
         validation_socket.map(|socket| socket.host_socket_path),
         validation_socket.map(|socket| socket.sandbox_socket_path),
     );
+    // An AppImage runs Zed from a FUSE mount under $TMPDIR, which the
+    // `--tmpfs /tmp` above hides, so the launcher below would fail to exec.
+    // The image is read-only already, so binding it back exposes nothing new.
+    if let Some(appdir) = appimage_mount_for(bridge_program, std::env::var_os("APPDIR")) {
+        push_bind(&mut bwrap_args, "--ro-bind", &appdir, &appdir);
+    }
     bwrap_args.push("--".to_string());
 
     let bridge = match permissions.network {
@@ -1505,6 +1518,26 @@ mod tests {
             .chain(args)
             .map(OsString::from)
             .collect()
+    }
+
+    #[test]
+    fn test_appimage_mount_is_bound_only_when_it_contains_the_launcher() {
+        let appdir = Some(OsString::from("/tmp/.mount_LatheAb12"));
+
+        assert_eq!(
+            appimage_mount_for("/tmp/.mount_LatheAb12/libexec/lathe-editor", appdir.clone()),
+            Some("/tmp/.mount_LatheAb12".to_string())
+        );
+        // APPDIR leaks into child processes, so a tarball install launched from
+        // an AppImage's terminal must not bind some unrelated image.
+        assert_eq!(
+            appimage_mount_for("/home/user/.local/share/lathe/libexec/lathe-editor", appdir),
+            None
+        );
+        assert_eq!(
+            appimage_mount_for("/home/user/.local/share/lathe/libexec/lathe-editor", None),
+            None
+        );
     }
 
     #[test]
