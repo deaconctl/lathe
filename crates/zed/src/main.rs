@@ -5,14 +5,19 @@ mod reliability;
 mod watcher_debug;
 mod zed;
 
-// Ensure the binary name stays in sync with APP_NAME so that the paths used
-// at runtime (data dir, config dir, etc.) match what the binary is called.
+// Lathe keeps upstream's Cargo binary name but ships its own APP_NAME, so the
+// two are checked separately.
 const _: () = assert!(
-    paths::APP_NAME_LOWERCASE
+    lathe_data_import::EXPECTED_CARGO_BIN_NAME
         .as_bytes()
         .eq_ignore_ascii_case(env!("CARGO_BIN_NAME").as_bytes()),
-    "paths::APP_NAME_LOWERCASE must match the binary name. \
-     Forks: update APP_NAME in crates/paths/src/paths.rs when renaming the binary.",
+    "The zed binary was renamed. Update EXPECTED_CARGO_BIN_NAME and the packaging scripts.",
+);
+const _: () = assert!(
+    lathe_data_import::EXPECTED_APP_NAME
+        .as_bytes()
+        .eq_ignore_ascii_case(paths::APP_NAME.as_bytes()),
+    "paths::APP_NAME changed. An upstream merge may have reset it to \"Zed\".",
 );
 
 use agent_ui::AgentPanel;
@@ -292,6 +297,10 @@ fn main() {
     // packages the other build's running language servers and agent servers are
     // executing from.
     paths::set_node_dir_namespace(release_channel::RELEASE_CHANNEL.dev_name());
+    lathe_data_import::import_from_zed(
+        release_channel::RELEASE_CHANNEL.dev_name(),
+        args.user_data_dir.is_some(),
+    );
 
     let file_errors = init_paths();
     if !file_errors.is_empty() {

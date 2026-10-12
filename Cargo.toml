@@ -135,6 +135,7 @@ members = [
     "crates/language_tools",
     "crates/languages",
     "crates/lathe",
+    "crates/lathe_data_import",
     "crates/lathe_hooks",
     "crates/line_ending_selector",
     "crates/livekit_api",
@@ -414,6 +415,7 @@ language_selector = { path = "crates/language_selector" }
 language_tools = { path = "crates/language_tools" }
 languages = { path = "crates/languages" }
 lathe = { path = "crates/lathe" }
+lathe_data_import = { path = "crates/lathe_data_import" }
 lathe_hooks = { path = "crates/lathe_hooks" }
 line_ending_selector = { path = "crates/line_ending_selector" }
 livekit_api = { path = "crates/livekit_api" }

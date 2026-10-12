@@ -464,8 +464,14 @@ pub fn accounts_root() -> PathBuf {
 /// imported from `~/.claude-profiles` (and any other account registered by
 /// reference) point at directories the user's own workflow still depends on,
 /// so removing such an account must not imply removing its files.
+///
+/// Accounts created before Lathe moved out of Zed's data dir stay where they
+/// were (moving them would change Claude Code's keychain entry and force a new
+/// sign-in), so Lathe still owns its folder under Zed's data dir.
 pub fn is_managed_config_dir(config_dir: &Path) -> bool {
     config_dir.starts_with(accounts_root())
+        || lathe_data_import::legacy_data_dir()
+            .is_some_and(|legacy| config_dir.starts_with(legacy.join("ai_accounts")))
 }
 
 /// Keychain lookup key under which an account's provider API key is stored, for
@@ -1197,6 +1203,10 @@ mod tests {
     fn is_managed_config_dir_only_matches_lathe_owned_dirs() {
         let managed = accounts_root().join("claude-acp").join("account-id");
         assert!(is_managed_config_dir(&managed));
+        if let Some(legacy) = lathe_data_import::legacy_data_dir() {
+            let created_before_the_move = legacy.join("ai_accounts").join("gemini").join("id");
+            assert!(is_managed_config_dir(&created_before_the_move));
+        }
         // Imported profiles are registered by reference and stay the user's.
         assert!(!is_managed_config_dir(Path::new(
             "/Users/someone/.claude-profiles/personal"

@@ -86,8 +86,10 @@ pub(crate) unsafe fn set_window_long(
     }
 }
 
+// Lathe: separate from stock Zed's `zed:url=` entries. Lathe copies Zed's on
+// first launch (`crates/lathe_data_import`), and must match its prefix.
 pub(crate) fn windows_credentials_target_name(url: &str) -> String {
-    format!("zed:url={}", url)
+    format!("lathe:url={}", url)
 }
 
 pub(crate) fn load_cursor(style: CursorStyle) -> Option<HCURSOR> {

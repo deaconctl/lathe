@@ -15,7 +15,10 @@
 
 mod module_tripwire;
 
-use gpui::App;
+use gpui::{App, AppContext as _, DismissEvent};
+use workspace::notifications::{
+    NotificationId, show_app_notification, simple_message_notification::MessageNotification,
+};
 
 /// Initialize every Lathe feature. Call once, early in application startup,
 /// wherever upstream initializes its own subsystems.
@@ -28,4 +31,45 @@ pub fn init(cx: &mut App) {
     pr_ui::init(cx);
     git_graph::init(cx);
     mobile_dev::init(cx);
+    report_data_import(cx);
+}
+
+/// The import from Zed's folders runs before logging starts, so its messages
+/// are logged here, and any account that needs a fresh sign-in is named in a
+/// notification.
+fn report_data_import(cx: &mut App) {
+    let Some(report) = lathe_data_import::take_report() else {
+        return;
+    };
+    for (level, message) in report.messages {
+        log::log!(level, "{message}");
+    }
+    if report.accounts_needing_sign_in.is_empty() {
+        return;
+    }
+
+    struct AccountsNeedSignIn;
+    let message = format!(
+        "Sign in again to {}. Lathe now keeps its data separate from Zed, and this \
+         sign-in couldn't be carried over.",
+        report.accounts_needing_sign_in.join(", ")
+    );
+    show_app_notification(
+        NotificationId::unique::<AccountsNeedSignIn>(),
+        cx,
+        move |cx| {
+            let message = message.clone();
+            cx.new(move |cx| {
+                MessageNotification::new(message, cx)
+                    .primary_message("Manage AI Accounts")
+                    .primary_on_click(|window, cx| {
+                        match cx.build_action("agent::ManageAiAccounts", None) {
+                            Ok(action) => window.dispatch_action(action, cx),
+                            Err(error) => log::error!("opening Manage AI Accounts: {error}"),
+                        }
+                        cx.emit(DismissEvent);
+                    })
+            })
+        },
+    );
 }

@@ -95,7 +95,7 @@ script/package-fork-windows.ps1 -Architecture x86_64
 script/install-fork-windows.ps1
 ```
 
-It installs as **Lathe** and runs alongside stock Zed without stepping on it.
+It installs as **Lathe** and runs alongside stock Zed without stepping on it, with its own settings, extensions, history and logs.
 
 Want to try a build without installing it to `/Applications`? Launch the bundle where it sits:
 
@@ -180,6 +180,6 @@ Builds, packages, and publishes a GitHub release. Needs the [GitHub CLI](https:/
 ## Notes
 
 - The first build takes a while. Incremental rebuilds are much faster.
-- On macOS, the app shares settings and extensions with stock Zed (`~/Library/Application Support/Zed`)
+- Lathe keeps its own settings and data: `~/.config/lathe` and `~/Library/Application Support/Lathe` on macOS, `$XDG_CONFIG_HOME/lathe` and `$XDG_DATA_HOME/lathe` on Linux, `%APPDATA%\Lathe` and `%LOCALAPPDATA%\Lathe` on Windows. On first launch it copies your settings, keymaps, themes, extensions, history and accounts over from stock Zed's folders. After that the two apps don't share changes.
 - Linux installs land in `~/.local/share/lathe`, CLI symlinked to `~/.local/bin/lathe`
 - `cargo-bundle` gets installed for you from [zed-industries/cargo-bundle](https://github.com/zed-industries/cargo-bundle)

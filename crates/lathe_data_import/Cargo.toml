@@ -1,0 +1,32 @@
+[package]
+name = "lathe_data_import"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+license = "GPL-3.0-or-later"
+
+[lints]
+workspace = true
+
+[lib]
+path = "src/lathe_data_import.rs"
+doctest = false
+
+[dependencies]
+anyhow.workspace = true
+libsqlite3-sys.workspace = true
+log.workspace = true
+parking_lot.workspace = true
+paths.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+zed_env_vars.workspace = true
+
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { workspace = true, features = ["Win32_Security_Credentials"] }
+
+[dev-dependencies]
+tempfile.workspace = true

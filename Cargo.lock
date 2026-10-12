@@ -594,6 +594,7 @@ dependencies = [
  "chrono",
  "collections",
  "gpui",
+ "lathe_data_import",
  "log",
  "paths",
  "serde",
@@ -9933,13 +9934,32 @@ dependencies = [
  "auto_update",
  "git_graph",
  "gpui",
+ "lathe_data_import",
  "lathe_hooks",
+ "log",
  "mobile_dev",
  "pr_ui",
  "project",
  "terminal",
  "theme",
  "workspace",
+]
+
+[[package]]
+name = "lathe_data_import"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "libc",
+ "libsqlite3-sys",
+ "log",
+ "parking_lot",
+ "paths",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "windows 0.62.2",
+ "zed_env_vars",
 ]
 
 [[package]]
@@ -22691,6 +22711,7 @@ dependencies = [
  "language_tools",
  "languages",
  "lathe",
+ "lathe_data_import",
  "lathe_hooks",
  "line_ending_selector",
  "log",

@@ -139,6 +139,7 @@ try {
 
 Section "Lathe/Zed log dirs"
 $logCandidates = @(
+    "$env:LOCALAPPDATA\Lathe\logs",
     "$env:LOCALAPPDATA\Zed\logs",
     "$env:APPDATA\Zed\logs",
     "$env:USERPROFILE\.config\zed\logs"
@@ -154,7 +155,8 @@ foreach ($dir in $logCandidates) {
                 Write-Output ("    {0:yyyy-MM-dd HH:mm:ss}  {1,10:N0}  {2}" -f $_.LastWriteTime, $_.Length, $_.Name)
             }
         if (-not $primaryLog) {
-            $primaryLog = Join-Path $dir 'Zed.log'
+            $primaryLog = Join-Path $dir 'Lathe.log'
+            if (-not (Test-Path $primaryLog)) { $primaryLog = Join-Path $dir 'Zed.log' }
             if (-not (Test-Path $primaryLog)) { $primaryLog = $null }
         }
     }

@@ -161,6 +161,7 @@ language_selector.workspace = true
 language_tools.workspace = true
 languages = { workspace = true, features = ["load-grammars"] }
 lathe.workspace = true
+lathe_data_import.workspace = true
 lathe_hooks.workspace = true
 line_ending_selector.workspace = true
 log.workspace = true
