@@ -517,6 +517,10 @@ pub struct Markdown {
     context_menu_selected_markdown: Option<SharedString>,
     search_highlights: Rc<[Range<usize>]>,
     active_search_highlight: Option<usize>,
+    /// When true, parsing is deferred until the markdown is first rendered
+    /// or [`Markdown::ensure_parsed`] is called. See
+    /// [`MarkdownOptions::defer_parsing`].
+    deferred: bool,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -526,6 +530,10 @@ pub struct MarkdownOptions {
     pub render_mermaid_diagrams: bool,
     pub parse_heading_slugs: bool,
     pub render_metadata_blocks: bool,
+    /// Defer parsing until the markdown is first rendered (or
+    /// [`Markdown::ensure_parsed`] is called) instead of parsing eagerly on
+    /// construction. Use for bulk-created content that is often off-screen.
+    pub defer_parsing: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -684,6 +692,7 @@ impl Markdown {
         } else {
             None
         };
+        let deferred = options.defer_parsing && !source.is_empty();
         let mut this = Self {
             source,
             selection: Selection::default(),
@@ -712,8 +721,11 @@ impl Markdown {
             context_menu_selected_markdown: None,
             search_highlights: Rc::default(),
             active_search_highlight: None,
+            deferred,
         };
-        this.parse(cx);
+        if !deferred {
+            this.parse(cx);
+        }
         this
     }
 
@@ -950,7 +962,7 @@ impl Markdown {
     }
 
     pub fn scroll_to_heading_when_parsed(&mut self, slug: SharedString, cx: &mut Context<Self>) {
-        if self.pending_parse.is_some() || self.source.is_empty() {
+        if self.pending_parse.is_some() || self.deferred || self.source.is_empty() {
             self.pending_heading_scroll = Some(slug);
         } else {
             self.scroll_to_heading(&slug, cx);
@@ -1004,7 +1016,7 @@ impl Markdown {
         source_index: usize,
         cx: &mut Context<Self>,
     ) {
-        if self.pending_parse.is_some() {
+        if self.pending_parse.is_some() || self.deferred {
             self.pending_autoscroll = Some(source_index);
         } else {
             self.autoscroll_request = Some(source_index);
@@ -1201,7 +1213,24 @@ impl Markdown {
         self.context_menu_selected_markdown.as_ref()
     }
 
+    /// Starts parsing if it was deferred (see [`MarkdownOptions::defer_parsing`]).
+    ///
+    /// Deferred parsing lets bulk-created markdown (e.g. restored thread
+    /// history) avoid allocating its parsed representation until it is actually
+    /// displayed. Rendering the markdown triggers this automatically; any other
+    /// code that needs the parsed events should call it first. Idempotent.
+    pub fn ensure_parsed(&mut self, cx: &mut Context<Self>) {
+        if self.deferred {
+            self.deferred = false;
+            self.parse(cx);
+        }
+    }
+
     fn parse(&mut self, cx: &mut Context<Self>) {
+        if self.deferred {
+            return;
+        }
+
         if self.source.is_empty() {
             self.should_reparse = false;
             self.pending_parse.take();
@@ -2592,6 +2621,11 @@ impl Element for MarkdownElement {
         window: &mut Window,
         cx: &mut App,
     ) -> (gpui::LayoutId, Self::RequestLayoutState) {
+        // If parsing was deferred, start it now. Only laid-out (visible)
+        // markdown reaches this point, so off-screen messages never parse.
+        self.markdown
+            .update(cx, |markdown, cx| markdown.ensure_parsed(cx));
+
         let highlights = {
             let markdown = self.markdown.read(cx);
             let colors = cx.theme().colors();
@@ -5510,6 +5544,50 @@ mod tests {
 
             markdown.set_active_search_highlight(Some(3), cx);
             assert_eq!(markdown.active_search_highlight(), None);
+        });
+    }
+
+    #[gpui::test]
+    fn test_deferred_parsing(cx: &mut TestAppContext) {
+        let markdown = cx.new(|cx| {
+            Markdown::new_with_options(
+                "# Title\n\nbody".into(),
+                None,
+                None,
+                MarkdownOptions {
+                    defer_parsing: true,
+                    ..Default::default()
+                },
+                cx,
+            )
+        });
+        markdown.update(cx, |markdown, cx| {
+            markdown.append(" more", cx);
+            markdown.request_autoscroll_to_source_index(9, cx);
+        });
+        cx.run_until_parked();
+        markdown.read_with(cx, |markdown, _| {
+            assert!(markdown.parsed_markdown().events().is_empty());
+            assert_eq!(markdown.source().as_ref(), "# Title\n\nbody more");
+            // Rendering consumes `autoscroll_request` against the parsed
+            // layout, so it must wait until the deferred parse has run.
+            assert_eq!(markdown.autoscroll_request, None);
+            assert_eq!(markdown.pending_autoscroll, Some(9));
+        });
+
+        markdown.update(cx, |markdown, cx| markdown.ensure_parsed(cx));
+        cx.run_until_parked();
+        markdown.read_with(cx, |markdown, _| {
+            assert!(!markdown.parsed_markdown().events().is_empty());
+            assert_eq!(
+                markdown.parsed_markdown().source().as_ref(),
+                "# Title\n\nbody more"
+            );
+            assert_eq!(
+                markdown.autoscroll_request,
+                Some(9),
+                "an autoscroll requested before parsing should survive it"
+            );
         });
     }
 

@@ -5,7 +5,7 @@ use crate::{
     thread_metadata_store::{ThreadId, ThreadMetadataStore},
 };
 use agent_client_protocol::schema::{v1 as acp_v1, v2 as acp_v2};
-use std::{cell::RefCell, path::Path};
+use std::{cell::RefCell, ops::Range, path::Path};
 
 use acp_thread::{
     Elicitation, ElicitationEntryId, ElicitationStatus, ForegroundActivity,
@@ -257,6 +257,26 @@ struct ParsedCatNumberedCode {
     code: String,
     first_number: u32,
     line_count: usize,
+}
+
+/// The subagent thread entries shown inline in an expanded subagent card.
+fn subagent_preview_range(tool_call: &ToolCall, total_entries: usize) -> Range<usize> {
+    const MAX_PREVIEW_ENTRIES: usize = 8;
+
+    let mut entry_range = if let Some(info) = tool_call.subagent_session_info.as_ref() {
+        info.message_start_index
+            ..info
+                .message_end_index
+                .map(|i| (i + 1).min(total_entries))
+                .unwrap_or(total_entries)
+    } else {
+        0..total_entries
+    };
+    entry_range.start = entry_range
+        .end
+        .saturating_sub(MAX_PREVIEW_ENTRIES)
+        .max(entry_range.start);
+    entry_range
 }
 
 fn parse_cat_numbered_markdown_code_block(markdown: &str) -> Option<ParsedCatNumberedCode> {
@@ -1308,6 +1328,81 @@ impl ThreadView {
 
     pub fn has_queued_messages(&self) -> bool {
         !self.message_queue.is_empty()
+    }
+
+    /// Builds the diff and terminal views of a restored tool call the first
+    /// time it is rendered with its content visible, including the entries of
+    /// an expanded subagent's inline preview. Restoring a thread skips these
+    /// views (see `EntryViewState::sync_entry_initial`), and only rows inside
+    /// the viewport are rendered, so off-screen history is never built.
+    ///
+    /// Also starts parsing the visible content's deferred markdown, because
+    /// some outputs (e.g. numbered `read_file` output) are drawn without a
+    /// `MarkdownElement` and would otherwise never parse.
+    fn materialize_rendered_entry(
+        &mut self,
+        entry_ix: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(AgentThreadEntry::ToolCall(tool_call)) =
+            self.thread.read(cx).entries().get(entry_ix)
+        else {
+            return;
+        };
+        let entry_view_state = self.entry_view_state.read(cx);
+        let needs_materialization =
+            entry_view_state.needs_tool_call_materialization(entry_ix, tool_call);
+        let content_markdowns = if entry_view_state.is_tool_call_content_visible(tool_call) {
+            tool_call
+                .content()
+                .iter()
+                .filter_map(|content| content.markdown().cloned())
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
+        let subagent_preview = if tool_call.is_subagent()
+            && entry_view_state.is_tool_call_expanded(&tool_call.id)
+            && let Some(info) = tool_call.subagent_session_info.as_ref()
+        {
+            self.server_view
+                .upgrade()
+                .and_then(|server_view| {
+                    server_view
+                        .read(cx)
+                        .as_connected()?
+                        .threads
+                        .get(&info.session_id)
+                        .cloned()
+                })
+                .map(|thread_view| {
+                    let total_entries = thread_view.read(cx).thread.read(cx).entries().len();
+                    (
+                        thread_view,
+                        subagent_preview_range(tool_call, total_entries),
+                    )
+                })
+        } else {
+            None
+        };
+
+        for markdown in content_markdowns {
+            markdown.update(cx, |markdown, cx| markdown.ensure_parsed(cx));
+        }
+        if needs_materialization {
+            let thread = self.thread.clone();
+            self.entry_view_state.update(cx, |state, cx| {
+                state.sync_entry(entry_ix, &thread, window, cx);
+            });
+        }
+        if let Some((thread_view, preview_range)) = subagent_preview {
+            thread_view.update(cx, |thread_view, cx| {
+                for preview_ix in preview_range {
+                    thread_view.materialize_rendered_entry(preview_ix, window, cx);
+                }
+            });
+        }
     }
 
     // events
@@ -6736,6 +6831,7 @@ impl ThreadView {
         list(
             self.list_state.clone(),
             cx.processor(move |this, index: usize, window, cx| {
+                this.materialize_rendered_entry(index, window, cx);
                 let entries = this.thread.read(cx).entries();
                 if let Some(entry) = entries.get(index) {
                     let rendered = this.render_entry(index, entries.len(), entry, window, cx);
@@ -9256,8 +9352,11 @@ impl ThreadView {
                                                                     let base_text = diff_data
                                                                         .base_text()
                                                                         .clone();
-                                                                    let buffer =
-                                                                        diff_data.buffer().clone();
+                                                                    let Some(buffer) =
+                                                                        diff_data.buffer().cloned()
+                                                                    else {
+                                                                        return;
+                                                                    };
                                                                     buffer.update(
                                                                         cx,
                                                                         |buffer, cx| {
@@ -11713,8 +11812,6 @@ impl ThreadView {
         window: &Window,
         cx: &Context<Self>,
     ) -> impl IntoElement {
-        const MAX_PREVIEW_ENTRIES: usize = 8;
-
         let subagent_view = thread_view.read(cx);
         let session_id = subagent_view.thread.read(cx).session_id().clone();
 
@@ -11739,19 +11836,7 @@ impl ThreadView {
 
         let entries = subagent_view.thread.read(cx).entries();
         let total_entries = entries.len();
-        let mut entry_range = if let Some(info) = tool_call.subagent_session_info.as_ref() {
-            info.message_start_index
-                ..info
-                    .message_end_index
-                    .map(|i| (i + 1).min(total_entries))
-                    .unwrap_or(total_entries)
-        } else {
-            0..total_entries
-        };
-        entry_range.start = entry_range
-            .end
-            .saturating_sub(MAX_PREVIEW_ENTRIES)
-            .max(entry_range.start);
+        let entry_range = subagent_preview_range(tool_call, total_entries);
         let start_ix = entry_range.start;
 
         let scroll_handle = self

@@ -1548,9 +1548,8 @@ impl ToolCall {
                 ) {
                     (Some(markdown), Some(text)) => update_markdown_in_place(markdown, &text, cx),
                     (_, Some(text)) => {
-                        self.raw_input_markdown = Some(cx.new(|cx| {
-                            Markdown::new(text.into(), Some(language_registry.clone()), None, cx)
-                        }));
+                        self.raw_input_markdown =
+                            Some(deferred_markdown(text, Some(language_registry.clone()), cx));
                     }
                     (_, None) => self.raw_input_markdown = None,
                 }
@@ -1601,8 +1600,7 @@ impl ToolCall {
         {
             update_markdown_in_place(markdown, &text, cx);
         } else {
-            let markdown =
-                cx.new(|cx| Markdown::new(text.into(), Some(language_registry.clone()), None, cx));
+            let markdown = deferred_markdown(text, Some(language_registry.clone()), cx);
             self.raw_output_content = Some(Box::new(ToolCallContent::ContentBlock {
                 block: ContentBlock::from_markdown(markdown),
                 meta: None,
@@ -2612,6 +2610,7 @@ impl ContentBlock {
                 MarkdownOptions {
                     render_mermaid_diagrams: true,
                     render_metadata_blocks: true,
+                    defer_parsing: true,
                     ..Default::default()
                 },
                 cx,
@@ -5320,6 +5319,19 @@ impl AcpThread {
         Ok(())
     }
 
+    /// Builds the diffs of the tool call at `index`. Called when the entry's
+    /// card first becomes visible, so restoring a thread does not build diffs
+    /// (buffers, ropes, syntax trees) for edits the user never opens.
+    pub fn resolve_tool_call_diffs(&self, index: usize, cx: &mut App) {
+        let diffs: Vec<Entity<Diff>> = match self.entries().get(index) {
+            Some(AgentThreadEntry::ToolCall(call)) => call.diffs().cloned().collect(),
+            _ => return,
+        };
+        for diff in diffs {
+            diff.update(cx, |diff, cx| diff.resolve(cx));
+        }
+    }
+
     /// Updates a tool call if id matches an existing entry, otherwise inserts a new one.
     pub fn upsert_tool_call(
         &mut self,
@@ -7437,13 +7449,36 @@ impl AcpThread {
     }
 }
 
+/// Creates a markdown entity whose parsing is deferred until it is first
+/// rendered. Used for thread content that can be long and is often off-screen
+/// (message blocks, tool-call input/output), so its parsed representation is
+/// not allocated until the user views it.
+fn deferred_markdown(
+    text: impl Into<SharedString>,
+    language_registry: Option<Arc<LanguageRegistry>>,
+    cx: &mut App,
+) -> Entity<Markdown> {
+    cx.new(|cx| {
+        Markdown::new_with_options(
+            text.into(),
+            language_registry,
+            None,
+            MarkdownOptions {
+                defer_parsing: true,
+                ..Default::default()
+            },
+            cx,
+        )
+    })
+}
+
 fn markdown_for_raw_output(
     raw_output: &serde_json::Value,
     language_registry: &Arc<LanguageRegistry>,
     cx: &mut App,
 ) -> Option<Entity<Markdown>> {
     let text = raw_output_text(raw_output)?;
-    Some(cx.new(|cx| Markdown::new(text.into(), Some(language_registry.clone()), None, cx)))
+    Some(deferred_markdown(text, Some(language_registry.clone()), cx))
 }
 
 fn raw_output_text(raw_output: &serde_json::Value) -> Option<String> {
