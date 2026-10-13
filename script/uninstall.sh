@@ -9,7 +9,9 @@ check_remaining_installations() {
         remaining=$(ls -d /Applications/Lathe*.app 2>/dev/null | wc -l)
         [ "$remaining" -eq 0 ]
     else
-        remaining=$(ls -d "$HOME/.local/share/lathe"* 2>/dev/null | wc -l)
+        # lathe-data is the data directory, not an installation.
+        remaining=$(ls -d "$HOME/.local/share/lathe" "$HOME/.local/share/lathe-"* 2>/dev/null \
+            | grep -v '/lathe-data$' | wc -l)
         [ "$remaining" -eq 0 ]
     fi
 }
@@ -19,7 +21,7 @@ prompt_remove_preferences() {
     read -r response
     case "$response" in
         [nN]|[nN][oO])
-            rm -rf "$HOME/.config/zed"
+            rm -rf "$HOME/.config/lathe"
             echo "Preferences removed."
             ;;
         *)
@@ -88,12 +90,11 @@ linux() {
     rm -f "$HOME/.local/share/icons/hicolor/512x512/apps/lathe.png"
     rm -f "$HOME/.local/share/icons/hicolor/1024x1024/apps/lathe.png"
 
-    # Lathe still writes its internal data to Zed-named paths.
-    rm -rf "$HOME/.local/share/zed/db/0-$db_suffix"
-    rm -f "$HOME/.local/share/zed/zed-$db_suffix.sock"
+    rm -rf "$HOME/.local/share/lathe-data/db/0-$db_suffix"
+    rm -f "$HOME/.local/share/lathe-data/zed-$db_suffix.sock"
 
     if check_remaining_installations; then
-        rm -rf "$HOME/.local/share/zed"
+        rm -rf "$HOME/.local/share/lathe-data"
         prompt_remove_preferences
     fi
 
@@ -134,8 +135,7 @@ macos() {
     rm -f "/usr/local/bin/lathe" 2>/dev/null \
         || sudo rm -f "/usr/local/bin/lathe"
 
-    # Lathe still writes its internal data to Zed-named paths.
-    rm -rf "$HOME/Library/Application Support/Zed/db/0-$db_suffix"
+    rm -rf "$HOME/Library/Application Support/Lathe/db/0-$db_suffix"
 
     rm -rf "$HOME/Library/Application Support/com.apple.sharedfilelist/com.apple.LSSharedFileList.ApplicationRecentDocuments/$app_id.sfl"*
     rm -rf "$HOME/Library/Caches/$app_id"
@@ -144,8 +144,8 @@ macos() {
     rm -rf "$HOME/Library/Saved Application State/$app_id.savedState"
 
     if check_remaining_installations; then
-        rm -rf "$HOME/Library/Application Support/Zed"
-        rm -rf "$HOME/Library/Logs/Zed"
+        rm -rf "$HOME/Library/Application Support/Lathe"
+        rm -rf "$HOME/Library/Logs/Lathe"
 
         prompt_remove_preferences
     fi

@@ -231,6 +231,12 @@ pub fn config_dir() -> &'static PathBuf {
     })
 }
 
+/// The data directory's name under `$XDG_DATA_HOME` outside Flatpak.
+/// `~/.local/share/lathe` (and `lathe-beta`, ...) is where
+/// script/install-fork-linux and auto-update put the app itself, and both
+/// clear that folder on every reinstall or update.
+pub const LINUX_DATA_DIR_NAME: &str = "lathe-data";
+
 /// Returns the path to the data directory used by Zed.
 pub fn data_dir() -> &'static PathBuf {
     CURRENT_DATA_DIR.get_or_init(|| {
@@ -242,11 +248,12 @@ pub fn data_dir() -> &'static PathBuf {
                 .join(APP_NAME)
         } else if cfg!(any(target_os = "linux", target_os = "freebsd")) {
             if let Ok(flatpak_xdg_data) = std::env::var("FLATPAK_XDG_DATA_HOME") {
-                flatpak_xdg_data.into()
+                PathBuf::from(flatpak_xdg_data).join(APP_NAME_LOWERCASE)
             } else {
-                dirs::data_local_dir().expect("failed to determine XDG_DATA_HOME directory")
+                dirs::data_local_dir()
+                    .expect("failed to determine XDG_DATA_HOME directory")
+                    .join(LINUX_DATA_DIR_NAME)
             }
-            .join(APP_NAME_LOWERCASE)
         } else if cfg!(target_os = "windows") {
             dirs::data_local_dir()
                 .expect("failed to determine LocalAppData directory")

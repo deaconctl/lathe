@@ -17,7 +17,6 @@ anyhow.workspace = true
 chrono.workspace = true
 collections.workspace = true
 gpui.workspace = true
-lathe_data_import.workspace = true
 log.workspace = true
 paths.workspace = true
 serde.workspace = true
@@ -27,4 +26,5 @@ smol.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+lathe_data_import.workspace = true
 paths = { workspace = true, features = ["test-support"] }

@@ -35,6 +35,9 @@ const MARKER_FILE_NAME: &str = ".imported_from_zed";
 const LOCK_FILE_NAME: &str = ".import.lock";
 const TEMPORARY_SUFFIX: &str = "lathe-import-tmp";
 const ZED_DATABASE_BACKUP_SUFFIX: &str = "before-lathe-repair";
+const FAILED_IMPORT_BACKUP_SUFFIX: &str = "before-lathe-import";
+const STABLE_REFRESH_BACKUP_SUFFIX: &str = "before-stable-import";
+const STABLE_REFRESH_KEY: &str = "refresh_from_zed/stable";
 const MAX_ATTEMPTS: u32 = 3;
 const STALE_LOCK_AGE: Duration = Duration::from_secs(120);
 const LOCK_WAIT: Duration = Duration::from_secs(5);
@@ -137,6 +140,13 @@ pub fn import_from_zed(release_channel: &str, has_custom_data_dir: bool) {
         return;
     };
     let mut report = ImportReport::default();
+    if cfg!(any(target_os = "linux", target_os = "freebsd"))
+        && let Err(error) = relocate_linux_data(&roots, &mut report)
+    {
+        report.warn(format!(
+            "moving Lathe's data out of its install folder failed: {error:#}"
+        ));
+    }
     if let Err(error) = import(&roots, release_channel, &mut report) {
         report.warn(format!("importing data from Zed failed: {error:#}"));
     }
@@ -171,7 +181,7 @@ fn legacy_sibling(directory: &Path) -> Option<PathBuf> {
     let name = directory.file_name()?.to_str()?;
     let legacy_name = if name == paths::APP_NAME {
         LEGACY_APP_NAME
-    } else if name == paths::APP_NAME_LOWERCASE {
+    } else if name == paths::APP_NAME_LOWERCASE || name == paths::LINUX_DATA_DIR_NAME {
         LEGACY_APP_NAME_LOWERCASE
     } else {
         return None;
@@ -180,6 +190,111 @@ fn legacy_sibling(directory: &Path) -> Option<PathBuf> {
         return None;
     }
     Some(directory.with_file_name(legacy_name))
+}
+
+/// What script/package-fork-linux puts in an installation. Everything else in
+/// the old data folder is data.
+const LINUX_INSTALL_ENTRIES: &[&str] = &["bin", "libexec", "lib", "share", "licenses.md"];
+
+/// Lathe 1.11.0 and 1.11.1 kept Linux data in `~/.local/share/lathe`, the
+/// folder script/install-fork-linux and auto-update install Lathe Stable into
+/// and clear on every update. This moves that data to
+/// [`paths::LINUX_DATA_DIR_NAME`], leaving the installation's files behind.
+/// Entries are renamed one at a time, and the import marker last, so an
+/// interrupted move resumes on the next launch.
+fn relocate_linux_data(roots: &Roots, report: &mut ImportReport) -> Result<()> {
+    if roots.data.file_name().and_then(|name| name.to_str()) != Some(paths::LINUX_DATA_DIR_NAME) {
+        return Ok(());
+    }
+    let old = roots.data.with_file_name(paths::APP_NAME_LOWERCASE);
+    let holds_data = old.join(MARKER_FILE_NAME).exists() || old.join("db").is_dir();
+    if !holds_data || roots.data.join(MARKER_FILE_NAME).exists() {
+        return Ok(());
+    }
+    fs::create_dir_all(&roots.data)
+        .with_context(|| format!("creating {}", roots.data.display()))?;
+
+    let mut entries = Vec::new();
+    for entry in fs::read_dir(&old).with_context(|| format!("reading {}", old.display()))? {
+        let name = entry?.file_name();
+        let is_install_entry = name
+            .to_str()
+            .is_some_and(|name| LINUX_INSTALL_ENTRIES.contains(&name));
+        if !is_install_entry && name != MARKER_FILE_NAME && name != LOCK_FILE_NAME {
+            entries.push(name);
+        }
+    }
+    if old.join(MARKER_FILE_NAME).exists() {
+        entries.push(MARKER_FILE_NAME.into());
+    }
+
+    for name in entries {
+        let source = old.join(&name);
+        let destination = roots.data.join(&name);
+        if destination.exists() {
+            report.warn(format!(
+                "not moving {} because {} already exists",
+                source.display(),
+                destination.display()
+            ));
+            continue;
+        }
+        match fs::rename(&source, &destination) {
+            Ok(()) => {}
+            // Another instance moved it first.
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => {
+                return Err(anyhow!(error).context(format!(
+                    "moving {} to {}",
+                    source.display(),
+                    destination.display()
+                )));
+            }
+        }
+    }
+
+    rewrite_ai_account_dirs(&roots.config.join("ai_accounts.json"), &old, &roots.data)?;
+    report.info(format!(
+        "moved Lathe's data from {} to {}",
+        old.display(),
+        roots.data.display()
+    ));
+    Ok(())
+}
+
+/// Accounts record their config folder as an absolute path, so the ones Lathe
+/// created under the old data folder have to follow it.
+fn rewrite_ai_account_dirs(index_path: &Path, old: &Path, new: &Path) -> Result<()> {
+    let contents = match fs::read(index_path) {
+        Ok(contents) => contents,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error.into()),
+    };
+    let mut index: serde_json::Value =
+        serde_json::from_slice(&contents).context("parsing ai_accounts.json")?;
+    let mut changed = false;
+    for account in index
+        .get_mut("accounts")
+        .and_then(|accounts| accounts.as_array_mut())
+        .into_iter()
+        .flatten()
+    {
+        let Some(config_dir) = account.get_mut("config_dir") else {
+            continue;
+        };
+        let Some(relative) = config_dir
+            .as_str()
+            .and_then(|path| Path::new(path).strip_prefix(old).ok())
+        else {
+            continue;
+        };
+        *config_dir = serde_json::Value::String(new.join(relative).to_string_lossy().into_owned());
+        changed = true;
+    }
+    if changed {
+        write_atomically(index_path, &serde_json::to_vec_pretty(&index)?)?;
+    }
+    Ok(())
 }
 
 #[derive(Default, Serialize, Deserialize)]
@@ -238,7 +353,9 @@ fn import(roots: &Roots, release_channel: &str, report: &mut ImportReport) -> Re
     };
 
     let marker_path = roots.data.join(MARKER_FILE_NAME);
-    let mut marker = match Marker::load(&marker_path)? {
+    let loaded_marker = Marker::load(&marker_path)?;
+    let imported_on_earlier_launch = loaded_marker.is_some();
+    let mut marker = match loaded_marker {
         Some(marker) => marker,
         None => {
             let marker = Marker {
@@ -308,7 +425,11 @@ fn import(roots: &Roots, release_channel: &str, report: &mut ImportReport) -> Re
 
         let threads = "threads/threads.db";
         if marker.should_attempt(threads) {
-            let result = copy_database(&roots.legacy_data.join(threads), &roots.data.join(threads));
+            let result = copy_database(
+                &roots.legacy_data.join(threads),
+                &roots.data.join(threads),
+                marker.attempts.contains_key(threads),
+            );
             marker.record(threads, result, report);
             marker.save(&marker_path)?;
         }
@@ -329,8 +450,13 @@ fn import(roots: &Roots, release_channel: &str, report: &mut ImportReport) -> Re
                 } else {
                     Ok(())
                 };
+                let after_failed_attempt = marker.attempts.contains_key(&key);
                 let result = result.and_then(|()| {
-                    copy_database(&roots.legacy_data.join(&relative), &destination)
+                    copy_database(
+                        &roots.legacy_data.join(&relative),
+                        &destination,
+                        after_failed_attempt,
+                    )
                 });
                 marker.record(&key, result, report);
                 marker.save(&marker_path)?;
@@ -343,6 +469,21 @@ fn import(roots: &Roots, release_channel: &str, report: &mut ImportReport) -> Re
             marker.record("windows_credentials", result, report);
             marker.save(&marker_path)?;
         }
+    }
+
+    // Lathe Beta imports the items no channel owns (config, extensions,
+    // threads, the global database) while Lathe Stable may still be on Zed's
+    // folders and writing to them. Stable's first import catches Lathe's copy
+    // up with anything it changed since. A first import by Stable itself
+    // already has the latest, so this is recorded as done.
+    if release_channel == "stable" && marker.should_attempt(STABLE_REFRESH_KEY) {
+        let result = if imported_on_earlier_launch {
+            refresh_shared_items_from_zed(roots, &database_scopes, report)
+        } else {
+            Ok(())
+        };
+        marker.record(STABLE_REFRESH_KEY, result, report);
+        marker.save(&marker_path)?;
     }
 
     for scope in ZED_DATABASE_SCOPES {
@@ -371,6 +512,114 @@ fn import(roots: &Roots, release_channel: &str, report: &mut ImportReport) -> Re
     }
 
     Ok(())
+}
+
+/// Copies every config and data file Zed changed after Lathe's copy was made,
+/// setting Lathe's version aside first. Databases are compared by their newest
+/// file, since recent writes may only be in the `-wal`.
+fn refresh_shared_items_from_zed(
+    roots: &Roots,
+    database_scopes: &[String],
+    report: &mut ImportReport,
+) -> Result<()> {
+    let mut refreshed = Vec::new();
+    if roots.legacy_config.is_dir() {
+        refresh_directory(&roots.legacy_config, &roots.config, &mut refreshed)?;
+        expire_unreachable_ai_accounts(&roots.config.join("ai_accounts.json"), report)?;
+    }
+    for entry in DATA_ENTRIES {
+        let source = roots.legacy_data.join(entry);
+        let destination = roots.data.join(entry);
+        if source.is_dir() {
+            refresh_directory(&source, &destination, &mut refreshed)?;
+        } else if source.is_file() {
+            refresh_file(&source, &destination, &mut refreshed)?;
+        }
+    }
+
+    let shared_databases = std::iter::once(PathBuf::from("threads/threads.db")).chain(
+        database_scopes
+            .iter()
+            .filter(|scope| !LATHE_CHANNEL_SCOPES.contains(&scope.as_str()))
+            .map(|scope| database_relative_path(scope)),
+    );
+    for relative in shared_databases {
+        let source = roots.legacy_data.join(&relative);
+        let destination = roots.data.join(&relative);
+        if source.exists() && newest_database_write(&source)? > newest_database_write(&destination)?
+        {
+            copy_database(&source, &destination, true)?;
+            refreshed.push(destination);
+        }
+    }
+
+    #[cfg(target_os = "windows")]
+    copy_windows_credentials(report)?;
+
+    for path in refreshed {
+        report.info(format!(
+            "updated {} with Lathe Stable's newer copy",
+            path.display()
+        ));
+    }
+    Ok(())
+}
+
+fn refresh_directory(
+    source: &Path,
+    destination: &Path,
+    refreshed: &mut Vec<PathBuf>,
+) -> Result<()> {
+    for entry in fs::read_dir(source).with_context(|| format!("reading {}", source.display()))? {
+        let entry = entry?;
+        let source_path = entry.path();
+        if is_temporary(&source_path) {
+            continue;
+        }
+        let destination_path = destination.join(entry.file_name());
+        let file_type = entry.file_type()?;
+        if file_type.is_dir() {
+            refresh_directory(&source_path, &destination_path, refreshed)?;
+        } else if file_type.is_file() {
+            refresh_file(&source_path, &destination_path, refreshed)?;
+        }
+    }
+    Ok(())
+}
+
+fn refresh_file(source: &Path, destination: &Path, refreshed: &mut Vec<PathBuf>) -> Result<()> {
+    if let Ok(metadata) = destination.symlink_metadata() {
+        if !metadata.is_file()
+            || fs::metadata(source)?.modified()? <= metadata.modified()?
+            || fs::read(source)? == fs::read(destination)?
+        {
+            return Ok(());
+        }
+        let set_aside = path_with_suffix(destination, &format!(".{STABLE_REFRESH_BACKUP_SUFFIX}"));
+        remove_if_exists(&set_aside)?;
+        fs::rename(destination, &set_aside)
+            .with_context(|| format!("setting aside {}", destination.display()))?;
+    }
+    if let Some(parent) = destination.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    let temporary = temporary_path(destination);
+    fs::copy(source, &temporary).with_context(|| format!("copying {}", source.display()))?;
+    fs::rename(&temporary, destination)?;
+    refreshed.push(destination.to_path_buf());
+    Ok(())
+}
+
+fn newest_database_write(path: &Path) -> Result<Option<SystemTime>> {
+    let mut newest = None;
+    for suffix in ["", "-wal"] {
+        match fs::metadata(path_with_suffix(path, suffix)) {
+            Ok(metadata) => newest = newest.max(Some(metadata.modified()?)),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(error.into()),
+        }
+    }
+    Ok(newest)
 }
 
 /// Scopes under Zed's `db/`, from directories named `0-<scope>`. The Dev
@@ -438,10 +687,22 @@ fn merge_directory(source: &Path, destination: &Path) -> Result<()> {
         let entry = entry?;
         let source_path = entry.path();
         let destination_path = destination.join(entry.file_name());
-        if is_temporary(&source_path) || destination_path.symlink_metadata().is_ok() {
+        if is_temporary(&source_path) {
             continue;
         }
         let file_type = entry.file_type()?;
+        // An existing real directory is merged into rather than skipped, so a
+        // folder a failed attempt only partly copied gets finished.
+        let destination_is_directory = destination_path
+            .symlink_metadata()
+            .is_ok_and(|metadata| metadata.is_dir());
+        if file_type.is_dir() && destination_is_directory {
+            merge_directory(&source_path, &destination_path)?;
+            continue;
+        }
+        if destination_path.symlink_metadata().is_ok() {
+            continue;
+        }
         if file_type.is_symlink() {
             copy_symlink(&source_path, &destination_path)?;
         } else if file_type.is_dir() {
@@ -672,14 +933,32 @@ fn clone_tree(_source: &Path, _destination: &Path) -> Result<bool> {
 
 /// Copies a SQLite database with the online backup API. A plain file copy can
 /// miss committed data still in the `-wal` file, or catch a write halfway.
-fn copy_database(source: &Path, destination: &Path) -> Result<()> {
-    if !source.exists() || destination.exists() {
+/// Copies one database. `after_failed_attempt` means an earlier attempt
+/// failed, so any file at `destination` is one Lathe created empty when it
+/// started without the import. It is set aside, not kept, otherwise the retry
+/// would see it and record the import as done.
+fn copy_database(source: &Path, destination: &Path, after_failed_attempt: bool) -> Result<()> {
+    if !source.exists() || (destination.exists() && !after_failed_attempt) {
         return Ok(());
     }
     let parent = destination
         .parent()
         .ok_or_else(|| anyhow!("{} has no parent", destination.display()))?;
     fs::create_dir_all(parent)?;
+    if destination.exists() {
+        for suffix in ["", "-wal", "-shm"] {
+            let path = path_with_suffix(destination, suffix);
+            if path.exists() {
+                let set_aside = path_with_suffix(
+                    destination,
+                    &format!(".{FAILED_IMPORT_BACKUP_SUFFIX}{suffix}"),
+                );
+                remove_if_exists(&set_aside)?;
+                fs::rename(&path, &set_aside)
+                    .with_context(|| format!("setting aside {}", path.display()))?;
+            }
+        }
+    }
     // Leftovers from a crashed attempt would be applied to the new file.
     for suffix in ["-wal", "-shm", "-journal"] {
         remove_if_exists(&path_with_suffix(destination, suffix))?;
@@ -1392,6 +1671,91 @@ mod tests {
     }
 
     #[test]
+    fn stable_catches_up_on_what_it_changed_after_betas_import() {
+        let fixture = Fixture::new();
+        fixture.write_legacy_config("settings.json", "{ \"theme\": \"old\" }");
+        fixture.write_legacy_config("keymap.json", "[]");
+        let threads = fixture.roots.legacy_data.join("threads/threads.db");
+        create_database(&threads, &["CREATE TABLE threads (id INTEGER)"]);
+        fixture.import_as("beta");
+
+        // Lathe Stable, still on Zed's folders, keeps writing after that.
+        let later = SystemTime::now() + Duration::from_secs(60);
+        fixture.write_legacy_config("settings.json", "{ \"theme\": \"new\" }");
+        create_database(&threads, &["INSERT INTO threads VALUES (1)"]);
+        for path in [
+            fixture.roots.legacy_config.join("settings.json"),
+            threads.clone(),
+        ] {
+            fs::File::options()
+                .write(true)
+                .open(&path)
+                .and_then(|file| file.set_modified(later))
+                .expect("set mtime");
+        }
+        remove_if_exists(&path_with_suffix(&threads, "-wal")).expect("remove wal");
+
+        fixture.import_as("stable");
+
+        let settings = fixture.roots.config.join("settings.json");
+        assert_eq!(
+            fs::read_to_string(&settings).expect("read"),
+            "{ \"theme\": \"new\" }"
+        );
+        assert_eq!(
+            fs::read_to_string(path_with_suffix(
+                &settings,
+                &format!(".{STABLE_REFRESH_BACKUP_SUFFIX}")
+            ))
+            .expect("read backup"),
+            "{ \"theme\": \"old\" }"
+        );
+        assert!(
+            !path_with_suffix(
+                &fixture.roots.config.join("keymap.json"),
+                &format!(".{STABLE_REFRESH_BACKUP_SUFFIX}")
+            )
+            .exists()
+        );
+        assert_eq!(
+            count_rows(&fixture.roots.data.join("threads/threads.db"), "threads"),
+            1
+        );
+        assert!(fixture.marker().completed.contains(STABLE_REFRESH_KEY));
+    }
+
+    #[test]
+    fn database_created_after_a_failed_copy_is_replaced_on_retry() {
+        let fixture = Fixture::new();
+        let relative = database_relative_path("global");
+        create_database(
+            &fixture.roots.legacy_data.join(&relative),
+            &[
+                "CREATE TABLE items (id INTEGER)",
+                "INSERT INTO items VALUES (1)",
+            ],
+        );
+        let key = database_key("global");
+        let mut marker = Marker::default();
+        marker.attempts.insert(key.clone(), 1);
+        fs::create_dir_all(&fixture.roots.data).expect("create data dir");
+        marker
+            .save(&fixture.roots.data.join(MARKER_FILE_NAME))
+            .expect("save marker");
+        // What Lathe opens when it starts without the import.
+        let destination = fixture.roots.data.join(&relative);
+        create_database(&destination, &["CREATE TABLE items (id INTEGER)"]);
+
+        fixture.import();
+
+        assert!(fixture.marker().completed.contains(&key));
+        assert_eq!(count_rows(&destination, "items"), 1);
+        assert!(
+            path_with_suffix(&destination, &format!(".{FAILED_IMPORT_BACKUP_SUFFIX}")).exists()
+        );
+    }
+
+    #[test]
     fn copies_databases_while_another_connection_is_writing() {
         let fixture = Fixture::new();
         let relative = database_relative_path("stable");
@@ -1631,6 +1995,76 @@ ADD
         assert_eq!(migration_rows(&stable, "WorkspaceDb").len(), 3);
     }
 
+    fn linux_roots(path: &Path) -> Roots {
+        Roots {
+            legacy_config: path.join("config/zed"),
+            legacy_data: path.join("share/zed"),
+            config: path.join("config/lathe"),
+            data: path.join("share").join(paths::LINUX_DATA_DIR_NAME),
+        }
+    }
+
+    #[test]
+    fn relocate_linux_data_leaves_the_installation_behind() {
+        let root = tempfile::tempdir().expect("temp dir");
+        let roots = linux_roots(root.path());
+        let old = root.path().join("share").join(paths::APP_NAME_LOWERCASE);
+        write(&old.join("libexec/lathe-editor"), "binary");
+        write(&old.join("bin/lathe"), "cli");
+        write(&old.join("db/0-beta/db.sqlite"), "db");
+        write(&old.join("ai_accounts/claude-acp/one/settings.json"), "{}");
+        write(&old.join(MARKER_FILE_NAME), "{}");
+        let account_dir = old.join("ai_accounts/claude-acp/one");
+        let elsewhere = root.path().join("profiles/work");
+        write(
+            &roots.config.join("ai_accounts.json"),
+            &serde_json::json!({
+                "accounts": [
+                    { "id": "one", "config_dir": account_dir },
+                    { "id": "two", "config_dir": elsewhere },
+                ]
+            })
+            .to_string(),
+        );
+
+        let mut report = ImportReport::default();
+        relocate_linux_data(&roots, &mut report).expect("relocate");
+
+        assert!(old.join("libexec/lathe-editor").exists());
+        assert!(old.join("bin/lathe").exists());
+        assert!(!old.join("db").exists());
+        assert!(!old.join(MARKER_FILE_NAME).exists());
+        assert!(roots.data.join("db/0-beta/db.sqlite").exists());
+        assert!(roots.data.join(MARKER_FILE_NAME).exists());
+        let index: serde_json::Value = serde_json::from_slice(
+            &fs::read(roots.config.join("ai_accounts.json")).expect("read index"),
+        )
+        .expect("parse index");
+        assert_eq!(
+            index["accounts"][0]["config_dir"],
+            serde_json::json!(roots.data.join("ai_accounts/claude-acp/one"))
+        );
+        assert_eq!(
+            index["accounts"][1]["config_dir"],
+            serde_json::json!(elsewhere)
+        );
+    }
+
+    #[test]
+    fn relocate_linux_data_ignores_a_bare_installation() {
+        let root = tempfile::tempdir().expect("temp dir");
+        let roots = linux_roots(root.path());
+        let old = root.path().join("share").join(paths::APP_NAME_LOWERCASE);
+        write(&old.join("libexec/lathe-editor"), "binary");
+        write(&old.join("node/bin/node"), "x");
+
+        let mut report = ImportReport::default();
+        relocate_linux_data(&roots, &mut report).expect("relocate");
+
+        assert!(old.join("node/bin/node").exists());
+        assert!(!roots.data.exists());
+    }
+
     #[test]
     fn legacy_sibling_uses_zeds_name() {
         let lathe = Path::new("/data").join(paths::APP_NAME);
@@ -1642,6 +2076,10 @@ ADD
             assert_eq!(
                 legacy_sibling(&lowercase),
                 Some(PathBuf::from("/config/zed"))
+            );
+            assert_eq!(
+                legacy_sibling(&Path::new("/share").join(paths::LINUX_DATA_DIR_NAME)),
+                Some(PathBuf::from("/share/zed"))
             );
         }
         assert_eq!(legacy_sibling(Path::new("/custom/dir")), None);
