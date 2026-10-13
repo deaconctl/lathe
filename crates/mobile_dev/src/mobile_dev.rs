@@ -212,6 +212,11 @@ fn register_workspace_actions(
                 panel.update(cx, |panel, cx| panel.start_metro(false, window, cx));
             }
         })
+        .register_action(|workspace, _: &StopMetro, _, cx| {
+            with_panel(workspace, cx, |panel, cx| {
+                panel.close_terminals_titled("Metro", cx)
+            });
+        })
         .register_action(|workspace, _: &BootSimulator, _, cx| {
             with_panel(workspace, cx, |panel, cx| panel.boot_selected_simulator(cx));
         })
@@ -263,6 +268,11 @@ fn register_workspace_actions(
         .register_action(|workspace, _: &StartSpotlight, window, cx| {
             with_panel_in(workspace, window, cx, |panel, window, cx| {
                 panel.start_spotlight(window, cx)
+            });
+        })
+        .register_action(|workspace, _: &StopSpotlight, _, cx| {
+            with_panel(workspace, cx, |panel, cx| {
+                panel.close_terminals_titled("Spotlight", cx)
             });
         });
 }
@@ -1281,6 +1291,21 @@ impl MobileDevPanel {
                 self.active_terminal = self.terminals.len().saturating_sub(1);
             }
             cx.notify();
+        }
+    }
+
+    /// Closes every terminal tab whose title starts with `prefix` ("Metro"
+    /// also matches "Metro (localhost)"). Dropping the terminal ends its
+    /// process, the same as the tab's close button.
+    fn close_terminals_titled(&mut self, prefix: &str, cx: &mut Context<Self>) {
+        let ids: Vec<usize> = self
+            .terminals
+            .iter()
+            .filter(|tab| tab.title.starts_with(prefix))
+            .map(|tab| tab.id)
+            .collect();
+        for id in ids {
+            self.close_terminal(id, cx);
         }
     }
 

@@ -17,7 +17,7 @@ use gpui::{
     Action, AnyElement, App, ClipboardItem, Context, Entity, EntityId, EventEmitter, FocusHandle,
     Focusable, Global, ImageSource, InteractiveElement, IntoElement, IsZero, Pixels, Render,
     Resource, RetainAllImageCache, ScrollHandle, SharedString, SharedUri, Subscription, Task,
-    WeakEntity, Window, point, px,
+    WeakEntity, Window, point,
 };
 use language::{Buffer, LanguageRegistry};
 use markdown::{
@@ -26,7 +26,7 @@ use markdown::{
 };
 use project::search::SearchQuery;
 use project::{Project, ProjectPath, image_store};
-use settings::{SeedQuerySetting, Settings, update_settings_file};
+use settings::{SeedQuerySetting, Settings};
 use theme::{SystemAppearance, Theme, ThemeRegistry};
 use theme_settings::ThemeSettings;
 use ui::utils::WithRemSize;
@@ -48,7 +48,6 @@ use workspace::searchable::{
     Direction, SearchEvent, SearchOptions, SearchToken, SearchableItem, SearchableItemHandle,
 };
 use workspace::{ItemId, Pane, SaveIntent, Workspace, WorkspaceId, delete_unloaded_items};
-use zed_actions::{DecreaseBufferFontSize, IncreaseBufferFontSize, ResetBufferFontSize};
 
 use crate::markdown_preview_settings::MarkdownPreviewSettings;
 use crate::{
@@ -59,7 +58,9 @@ use crate::{ScrollPageDown, ScrollPageUp, ScrollToBottom, ScrollToTop, ScrollUp,
 
 const REPARSE_DEBOUNCE: Duration = Duration::from_millis(200);
 
-fn reset_persisted_font_size(settings: &mut settings::SettingsContent) {
+/// Clears a persisted preview font size without adding an empty
+/// `markdown_preview` object to settings that never had one.
+pub fn reset_persisted_font_size(settings: &mut settings::SettingsContent) {
     if let Some(markdown_preview) = settings.markdown_preview.as_mut() {
         markdown_preview.font_size = None;
     }
@@ -837,63 +838,6 @@ impl MarkdownPreviewView {
     fn line_scroll_amount(&self, cx: &App) -> Pixels {
         let settings = ThemeSettings::get_global(cx);
         settings.markdown_preview_font_size(cx) * settings.buffer_line_height.value()
-    }
-
-    fn increase_font_size(
-        &mut self,
-        action: &IncreaseBufferFontSize,
-        _: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.adjust_font_size(action.persist, px(1.0), cx);
-    }
-
-    fn decrease_font_size(
-        &mut self,
-        action: &DecreaseBufferFontSize,
-        _: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.adjust_font_size(action.persist, px(-1.0), cx);
-    }
-
-    fn adjust_font_size(&mut self, persist: bool, delta: Pixels, cx: &mut Context<Self>) {
-        if persist {
-            let Ok(fs) = self
-                .workspace
-                .read_with(cx, |workspace, _| workspace.app_state().fs.clone())
-            else {
-                return;
-            };
-            update_settings_file(fs, cx, move |settings, cx| {
-                let size = ThemeSettings::get_global(cx).markdown_preview_font_size(cx) + delta;
-                settings.markdown_preview.get_or_insert_default().font_size =
-                    Some(f32::from(theme_settings::clamp_font_size(size)).into());
-            });
-        } else {
-            theme_settings::adjust_markdown_preview_font_size(cx, |size| size + delta);
-        }
-    }
-
-    fn reset_font_size(
-        &mut self,
-        action: &ResetBufferFontSize,
-        _: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        if action.persist {
-            let Ok(fs) = self
-                .workspace
-                .read_with(cx, |workspace, _| workspace.app_state().fs.clone())
-            else {
-                return;
-            };
-            update_settings_file(fs, cx, move |settings, _| {
-                reset_persisted_font_size(settings);
-            });
-        } else {
-            theme_settings::reset_markdown_preview_font_size(cx);
-        }
     }
 
     fn scroll_by_amount(&self, distance: Pixels) {
@@ -1834,7 +1778,8 @@ impl Render for MarkdownPreviewView {
             .as_ref()
             .map(|theme| theme.colors().editor_background)
             .unwrap_or_else(|| cx.theme().colors().editor_background);
-        let preview_font_size = ThemeSettings::get_global(cx).markdown_preview_font_size(cx);
+        let preview_font_size =
+            ThemeSettings::get_global(cx).markdown_preview_font_size_in_window(window, cx);
         let hovered_url = self.hovered_url.clone();
         div()
             .image_cache(self.image_cache.clone())
@@ -1855,9 +1800,6 @@ impl Render for MarkdownPreviewView {
             .on_action(cx.listener(MarkdownPreviewView::scroll_to_top))
             .on_action(cx.listener(MarkdownPreviewView::scroll_to_bottom))
             .on_action(cx.listener(MarkdownPreviewView::close_and_return_to_editor))
-            .on_action(cx.listener(MarkdownPreviewView::increase_font_size))
-            .on_action(cx.listener(MarkdownPreviewView::decrease_font_size))
-            .on_action(cx.listener(MarkdownPreviewView::reset_font_size))
             .w_full()
             .flex_1()
             .min_h_0()

@@ -671,7 +671,16 @@ mod tests {
         for field in ThemeColorField::iter() {
             light.set_color(field, dark.color(field));
         }
-        assert_eq!(light, dark);
+        // Setting an optional color makes it explicit, where the palette
+        // leaves it unset and falls back to another color.
+        let code_lens = dark.color(ThemeColorField::EditorCodeLensForeground);
+        assert_eq!(
+            light,
+            ThemeColors {
+                editor_code_lens_foreground: Some(code_lens),
+                ..dark
+            }
+        );
     }
 
     #[test]

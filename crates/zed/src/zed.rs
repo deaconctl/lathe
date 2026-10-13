@@ -944,7 +944,7 @@ fn persist_zoom_reset(fs: Arc<dyn Fs>, cx: &mut App) {
         settings.theme.agent_ui_font_size = None;
         settings.theme.agent_buffer_font_size = None;
         settings.theme.git_commit_buffer_font_size = None;
-        settings.markdown_preview.get_or_insert_default().font_size = None;
+        markdown_preview::markdown_preview_view::reset_persisted_font_size(settings);
     });
 }
 

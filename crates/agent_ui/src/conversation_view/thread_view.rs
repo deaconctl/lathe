@@ -5160,6 +5160,7 @@ impl ThreadView {
                                     .child(self.render_add_context_button(cx))
                                     .child(self.render_follow_toggle(cx))
                                     .children(self.render_fast_mode_control(cx))
+                                    .child(self.render_compact_terminal_cards_control(cx))
                                     .children(self.render_thinking_control(cx)),
                             )
                             .child(
@@ -5857,6 +5858,40 @@ impl ThreadView {
             return None;
         }
         Some((provider_id, model_id, confirmation))
+    }
+
+    fn render_compact_terminal_cards_control(&self, cx: &mut Context<Self>) -> AnyElement {
+        let compact_terminal_cards = AgentSettings::get_global(cx).compact_terminal_cards;
+        let (tooltip_label, icon, color) = if compact_terminal_cards {
+            (
+                "Disable Compact Terminal Cards",
+                IconName::Compact,
+                Color::Accent,
+            )
+        } else {
+            (
+                "Enable Compact Terminal Cards",
+                IconName::ExpandVertical,
+                Color::Custom(cx.theme().colors().icon_disabled.opacity(0.8)),
+            )
+        };
+        let focus_handle = self.message_editor.focus_handle(cx);
+
+        IconButton::new("compact-terminal-cards", icon)
+            .icon_size(IconSize::Small)
+            .icon_color(color)
+            .tooltip(move |_, cx| {
+                Tooltip::for_action_in(
+                    tooltip_label,
+                    &ToggleCompactTerminalCards,
+                    &focus_handle,
+                    cx,
+                )
+            })
+            .on_click(cx.listener(|this, _, _window, cx| {
+                this.toggle_compact_terminal_cards(cx);
+            }))
+            .into_any_element()
     }
 
     fn render_thinking_control(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
@@ -8588,6 +8623,14 @@ impl ThreadView {
             .child(div().absolute().top_1().right_1().child(copy_button))
     }
 
+    fn terminal_command_summary(command_source: &str) -> SharedString {
+        command_source
+            .lines()
+            .map(str::trim)
+            .find(|line| !line.is_empty() && !line.starts_with("```"))
+            .map_or_else(|| "Run command".into(), |line| line.to_string().into())
+    }
+
     fn render_terminal_tool_call(
         &self,
         active_session_id: &acp_v1::SessionId,
@@ -8661,6 +8704,12 @@ impl ThreadView {
             .entry_view_state
             .read(cx)
             .is_tool_call_expanded(&tool_call.id);
+        let compact_when_collapsed = AgentSettings::get_global(cx).compact_terminal_cards;
+        let header_label: SharedString = if compact_when_collapsed && !is_expanded {
+            Self::terminal_command_summary(tool_call.label.read(cx).source())
+        } else {
+            working_dir.into()
+        };
 
         let truncated_tooltip = truncated_output.then(|| {
             if let Some(output) = output {
@@ -8686,7 +8735,7 @@ impl ThreadView {
         let header = TerminalToolHeader::new(
             terminal.entity_id().to_string(),
             header_group,
-            working_dir,
+            header_label,
             is_expanded,
         )
         .elapsed(time_elapsed)
@@ -8723,7 +8772,9 @@ impl ThreadView {
         .when_some(tool_call.sandbox_not_applied.as_ref(), |header, reason| {
             header.sandbox_warning(self.sandbox_not_applied_warning(reason, cx))
         })
-        .command_slot(command_element);
+        .when(is_expanded || !compact_when_collapsed, |header| {
+            header.command_slot(command_element)
+        });
 
         let terminal_view = self
             .entry_view_state
@@ -13063,6 +13114,23 @@ impl ThreadView {
         });
     }
 
+    fn toggle_compact_terminal_cards(&mut self, cx: &mut Context<Self>) {
+        let compact_terminal_cards = !AgentSettings::get_global(cx).compact_terminal_cards;
+        let fs = self.thread.read(cx).project().read(cx).fs().clone();
+        let completion = update_settings_file_with_completion(fs, cx, move |settings, _| {
+            settings
+                .agent
+                .get_or_insert_default()
+                .compact_terminal_cards = Some(compact_terminal_cards);
+        });
+        cx.spawn(async move |this, cx| {
+            completion.await??;
+            this.update(cx, |_this, cx| cx.notify())?;
+            anyhow::Ok(())
+        })
+        .detach_and_log_err(cx);
+    }
+
     fn toggle_fast_mode(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if !self.fast_mode_available(cx) {
             return;
@@ -13365,6 +13433,11 @@ impl Render for ThreadView {
             .on_action(cx.listener(|this, _: &ToggleFastMode, window, cx| {
                 this.toggle_fast_mode(window, cx);
             }))
+            .on_action(
+                cx.listener(|this, _: &ToggleCompactTerminalCards, _window, cx| {
+                    this.toggle_compact_terminal_cards(cx);
+                }),
+            )
             .on_action(cx.listener(|this, _: &ToggleThinkingMode, _window, cx| {
                 if this.thread.read(cx).status() != ThreadStatus::Idle {
                     return;
@@ -14132,6 +14205,22 @@ mod tests {
                 "{path}"
             );
         }
+    }
+
+    #[test]
+    fn test_terminal_command_summary_uses_the_first_command_line() {
+        assert_eq!(
+            ThreadView::terminal_command_summary("```\npwd && ls\ncat Cargo.toml\n```").as_ref(),
+            "pwd && ls"
+        );
+        assert_eq!(
+            ThreadView::terminal_command_summary("\n\n  cargo test  \n").as_ref(),
+            "cargo test"
+        );
+        assert_eq!(
+            ThreadView::terminal_command_summary("```\n```").as_ref(),
+            "Run command"
+        );
     }
 
     #[gpui::test]
