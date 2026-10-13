@@ -3,6 +3,7 @@ use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::SystemTime;
 
 use gpui::AsyncApp;
@@ -66,6 +67,8 @@ fn accounts_path() -> PathBuf {
 /// the index on every render, so this turns a read and JSON parse into a `stat`
 /// while still picking up writes from other Lathe instances.
 static INDEX_CACHE: Mutex<Option<(SystemTime, CollabAccountsIndex)>> = Mutex::new(None);
+
+static ADDING_ACCOUNT: AtomicBool = AtomicBool::new(false);
 
 pub fn load_index() -> CollabAccountsIndex {
     let path = accounts_path();
@@ -198,10 +201,21 @@ impl Client {
         self.sign_in_with_optional_connect(true, cx).await
     }
 
+    /// Whether an add-account sign-in is in flight. Workspaces bound to an
+    /// account must not switch to it meanwhile: the switch would cancel the
+    /// browser sign-in and sign the old account back in.
+    pub fn is_adding_account(&self) -> bool {
+        ADDING_ACCOUNT.load(Ordering::SeqCst)
+    }
+
     /// Starts a new browser sign-in flow to add a second account, disconnecting
     /// the current session first. The new account is stored under its own
-    /// keychain entry and becomes the active account on success.
-    pub async fn add_account(self: &Arc<Self>, cx: &AsyncApp) -> Result<()> {
+    /// keychain entry and becomes the active account on success. Returns the
+    /// new account's id.
+    pub async fn add_account(self: &Arc<Self>, cx: &AsyncApp) -> Result<String> {
+        ADDING_ACCOUNT.store(true, Ordering::SeqCst);
+        let _clear_adding_account = util::defer(|| ADDING_ACCOUNT.store(false, Ordering::SeqCst));
+
         self.state.write().credentials = None;
         self.cloud_client.clear_credentials();
         self.disconnect(cx);
@@ -213,7 +227,10 @@ impl Client {
         index.active_id = None;
         save_index(&index).log_err();
 
-        self.sign_in_with_optional_connect(true, cx).await
+        self.sign_in_with_optional_connect(true, cx).await?;
+        load_index()
+            .active_id
+            .context("sign-in finished without an active collab account")
     }
 
     /// Deletes the given account's keychain entry and removes it from the

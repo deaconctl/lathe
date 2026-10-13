@@ -125,6 +125,20 @@ impl super::Workspace {
             .detach_and_log_err(cx);
     }
 
+    /// Signs in a new collab account and binds this workspace to it. Left bound
+    /// to the previous account, the title bar would keep showing that account
+    /// and the next window activation would switch back to it.
+    pub fn add_collab_account(&mut self, cx: &mut Context<Self>) {
+        let client = self.client().clone();
+        cx.spawn(async move |this, cx| {
+            let account_id = client.add_account(cx).await?;
+            this.update(cx, |this, cx| {
+                this.set_bound_collab_account_id(Some(account_id), cx)
+            })
+        })
+        .detach_and_log_err(cx);
+    }
+
     pub(super) fn apply_bound_collab_account(
         &self,
         database_id: WorkspaceId,
@@ -144,7 +158,9 @@ impl super::Workspace {
             let Some(bound_id) = bound_id else {
                 return;
             };
-            if client.active_account_id().as_deref() == Some(bound_id.as_str()) {
+            if client.is_adding_account()
+                || client.active_account_id().as_deref() == Some(bound_id.as_str())
+            {
                 return;
             }
             if !client

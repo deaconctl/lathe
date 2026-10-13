@@ -210,7 +210,7 @@ pub fn init(client: &Arc<Client>, cx: &mut App) {
         let client = client.clone();
         move |_: &AddAccount, cx| {
             if let Some(client) = client.upgrade() {
-                cx.spawn(async move |cx| client.add_account(cx).await)
+                cx.spawn(async move |cx| client.add_account(cx).await.map(|_| ()))
                     .detach_and_log_err(cx);
             }
         }

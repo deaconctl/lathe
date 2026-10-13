@@ -69,19 +69,23 @@ pub(crate) fn append_accounts_menu(
                 },
             );
         }
-        this.action("Add Account…", client::AddAccount.boxed_clone())
-            .when(is_signed_in, |this| {
-                let active_label = active_account_id.as_ref().and_then(|id| {
-                    saved_accounts
-                        .iter()
-                        .find(|account| &account.id == id)
-                        .map(|account| account.label.clone())
-                });
-                let sign_out_label = match active_label {
-                    Some(label) => format!("Sign Out of {label}"),
-                    None => "Sign Out".to_string(),
-                };
-                this.action(sign_out_label, client::SignOut.boxed_clone())
-            })
+        this.entry("Add Account…", None, move |_window, cx| {
+            if let Some(workspace) = workspace.upgrade() {
+                workspace.update(cx, |workspace, cx| workspace.add_collab_account(cx));
+            }
+        })
+        .when(is_signed_in, |this| {
+            let active_label = active_account_id.as_ref().and_then(|id| {
+                saved_accounts
+                    .iter()
+                    .find(|account| &account.id == id)
+                    .map(|account| account.label.clone())
+            });
+            let sign_out_label = match active_label {
+                Some(label) => format!("Sign Out of {label}"),
+                None => "Sign Out".to_string(),
+            };
+            this.action(sign_out_label, client::SignOut.boxed_clone())
+        })
     })
 }
