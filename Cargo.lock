@@ -18593,7 +18593,6 @@ dependencies = [
  "cloud_api_types",
  "command_palette_hooks",
  "db",
- "feature_flags",
  "fs",
  "git",
  "git_ui",

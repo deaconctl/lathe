@@ -221,9 +221,6 @@ Commands (via the command palette):
 ### Multi-account collab switcher
 Sign into more than one Zed Cloud account and switch between them from the avatar menu. Saved accounts are listed under **Accounts** by their GitHub username, with **Add Account…** and **Sign Out** actions.
 
-### Copy collab link dialog
-Generating a shareable collab link brings up a dialog for picking which saved account to link from. Useful if you work across personal and work Zed Cloud accounts.
-
 ---
 
 ## AWS profiles

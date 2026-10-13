@@ -1140,7 +1140,6 @@ mod tests {
                 position: settings::SidebarDockPosition::Left,
             },
             thinking_display: Default::default(),
-            new_thread_location: Default::default(),
         };
 
         cx.update(|cx| {

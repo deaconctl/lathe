@@ -221,15 +221,8 @@
     "bindings": {
       "ctrl-n": "agent::NewThread",
       "shift-alt-c": "agent::OpenSettings",
-      "shift-alt-l": "agent::OpenRulesLibrary",
-      "shift-alt-p": "agent::ManageProfiles",
       "ctrl-shift-alt-a": "agent::ManageAiAccounts",
-      "ctrl-i": "agent::ToggleProfileSelector",
-      "shift-tab": "agent::CycleModeSelector",
-      "alt-tab": "agent::CycleFavoriteModels",
       // `alt-l` is provided as an alternative to `alt-tab` as the latter breaks on Windows under the `AgentPanel` context
-      "alt-l": "agent::CycleFavoriteModels",
-      "shift-alt-/": "agent::ToggleModelSelector",
       "shift-alt-i": "agent::ToggleOptionsMenu",
       "ctrl-shift-alt-n": "agent::ToggleNewThreadMenu",
       "ctrl-shift-e": "project_panel::ToggleFocus",

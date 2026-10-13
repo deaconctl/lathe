@@ -41,7 +41,6 @@ client.workspace = true
 cloud_api_types.workspace = true
 command_palette_hooks.workspace = true
 db.workspace = true
-feature_flags.workspace = true
 fs.workspace = true
 git.workspace = true
 git_ui.workspace = true

@@ -97,16 +97,6 @@ pub enum ThinkingBlockDisplay {
     AlwaysCollapsed,
 }
 
-#[derive(
-    Copy, Clone, Default, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, JsonSchema, MergeFrom,
-)]
-#[serde(rename_all = "snake_case")]
-pub enum NewThreadLocation {
-    #[default]
-    LocalProject,
-    NewWorktree,
-}
-
 /// Threshold at which agent auto-compaction runs. See
 /// [`AutoCompactSettingsContent::threshold`] for the accepted formats.
 ///
@@ -239,8 +229,6 @@ pub struct AgentSettingsContent {
     ///
     /// Default: left (Agentic layout), right (Classic layout)
     pub dock: Option<DockPosition>,
-    /// Whether new threads start in the current local project or a new Git worktree.
-    pub new_thread_location: Option<NewThreadLocation>,
     /// Whether the agent panel should use flexible (proportional) sizing when docked to the
     /// left or right.
     ///

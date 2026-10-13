@@ -257,13 +257,7 @@
     "bindings": {
       "cmd-n": "agent::NewThread",
       "cmd-alt-c": "agent::OpenSettings",
-      "cmd-alt-l": "agent::OpenRulesLibrary",
-      "cmd-alt-p": "agent::ManageProfiles",
       "cmd-alt-shift-a": "agent::ManageAiAccounts",
-      "cmd-i": "agent::ToggleProfileSelector",
-      "shift-tab": "agent::CycleModeSelector",
-      "cmd-alt-/": "agent::ToggleModelSelector",
-      "alt-tab": "agent::CycleFavoriteModels",
       "cmd-alt-m": "agent::ToggleOptionsMenu",
       "cmd-alt-shift-n": "agent::ToggleNewThreadMenu",
       "cmd-shift-e": "project_panel::ToggleFocus",
