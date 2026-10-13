@@ -15,9 +15,12 @@
 
 mod module_tripwire;
 
-use gpui::{App, AppContext as _, DismissEvent};
-use workspace::notifications::{
-    NotificationId, show_app_notification, simple_message_notification::MessageNotification,
+use gpui::{App, AppContext as _, DismissEvent, TaskExt as _};
+use workspace::{
+    Workspace,
+    notifications::{
+        NotificationId, show_app_notification, simple_message_notification::MessageNotification,
+    },
 };
 
 /// Initialize every Lathe feature. Call once, early in application startup,
@@ -31,7 +34,28 @@ pub fn init(cx: &mut App) {
     pr_ui::init(cx);
     git_graph::init(cx);
     mobile_dev::init(cx);
+    register_collab_account_actions(cx);
     report_data_import(cx);
+}
+
+/// Handles the collab account actions at the workspace, ahead of the app-level
+/// handlers in `client`, so the workspace is bound to the account it ends up
+/// on. Left bound to the previous account, the next window activation would
+/// switch back to it.
+fn register_collab_account_actions(cx: &mut App) {
+    cx.observe_new(|workspace: &mut Workspace, _, _| {
+        workspace.register_action(|workspace, _: &client::AddAccount, _, cx| {
+            workspace.add_collab_account(cx);
+        });
+        workspace.register_action(|workspace, action: &client::SwitchAccount, _, cx| {
+            let account_id = action.account_id.clone();
+            workspace.set_bound_collab_account_id(Some(account_id.clone()), cx);
+            let client = workspace.client().clone();
+            cx.spawn(async move |_, cx| client.switch_account(account_id, cx).await)
+                .detach_and_log_err(cx);
+        });
+    })
+    .detach();
 }
 
 /// The import from Zed's folders runs before logging starts, so its messages

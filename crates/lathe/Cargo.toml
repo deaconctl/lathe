@@ -21,6 +21,7 @@ pr_ui.workspace = true
 workspace.workspace = true
 acp_tools.workspace = true
 auto_update.workspace = true
+client.workspace = true
 project.workspace = true
 terminal.workspace = true
 theme.workspace = true

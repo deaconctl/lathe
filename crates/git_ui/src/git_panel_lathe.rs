@@ -2222,11 +2222,12 @@ impl super::GitPanel {
             .into_iter()
             .find(|a| a.id == bound_id)?;
         let login = account.login.as_deref()?;
+        // Without GitHub's id the noreply address wouldn't attribute the
+        // commit, so leave the author to git config until it has been fetched.
+        let github_user_id = account.github_user_id?;
         let name = SharedString::from(login.to_string());
-        let email = SharedString::from(format!(
-            "{}+{}@users.noreply.github.com",
-            account.user_id, login
-        ));
+        let email =
+            SharedString::from(format!("{github_user_id}+{login}@users.noreply.github.com"));
         Some((name, email))
     }
 

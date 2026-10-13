@@ -176,10 +176,10 @@ impl AddAiAccountModal {
                         // config-dir env injected explicitly, so it does not
                         // depend on the cached ACP connection. Bind for the chip,
                         // then spawn the login terminal.
-                        bind_account_to_workspace(
+                        bind_account_and_restart_agent(
                             &self.workspace,
-                            &agent_id,
-                            Some(account.id.clone()),
+                            agent_id.clone(),
+                            account.id.clone(),
                             cx,
                         );
                         self.trigger_login_flow(descriptor, &account.config_dir, window, cx);
@@ -217,7 +217,8 @@ impl AddAiAccountModal {
     /// Stores an API-key account's key in the system keychain, binds the account
     /// to this workspace, and confirms via toast. The bound account's key is
     /// injected into the agent subprocess at spawn (see `api_key_for_gemini_cli`
-    /// in `agent_servers`), so no shell config or restart is needed.
+    /// in `agent_servers`), so no shell config is needed, but a running agent
+    /// is restarted to pick it up.
     fn connect_api_key_account(
         &self,
         descriptor: &'static AgentDescriptor,
@@ -255,7 +256,7 @@ impl AddAiAccountModal {
             }
 
             this.update(cx, |_this, cx| {
-                bind_account_to_workspace(&workspace, &agent_id, Some(account_id), cx);
+                bind_account_and_restart_agent(&workspace, agent_id, account_id, cx);
                 if let Some(workspace) = workspace.upgrade() {
                     workspace.update(cx, |workspace, cx| {
                         workspace.toggle_status_toast(
@@ -630,5 +631,25 @@ mod tests {
         // It can't be called without a Context, but the lookup logic itself
         // is exercised by descriptor_for() returning None for unknown IDs.
         assert!(descriptor_for("definitely-not-an-agent").is_none());
+    }
+}
+
+/// Binds the account to the workspace and restarts the agent's connection.
+/// Account config and keys are only read when the agent process spawns, so an
+/// agent already running would otherwise keep using the previous account.
+fn bind_account_and_restart_agent(
+    workspace: &WeakEntity<Workspace>,
+    agent_id: String,
+    account_id: String,
+    cx: &mut App,
+) {
+    let panel = workspace
+        .upgrade()
+        .and_then(|workspace| workspace.read(cx).panel::<AgentPanel>(cx));
+    match panel {
+        Some(panel) => panel.update(cx, |panel, cx| {
+            panel.switch_ai_account(agent_id, account_id, cx);
+        }),
+        None => bind_account_to_workspace(workspace, &agent_id, Some(account_id), cx),
     }
 }

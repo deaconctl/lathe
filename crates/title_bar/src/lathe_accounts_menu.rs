@@ -1,7 +1,6 @@
 use client::accounts::CollabAccount;
 use gpui::{Action, SharedString, WeakEntity};
 use ui::{ContextMenu, Icon, IconName, Label, prelude::*};
-use util::ResultExt;
 use workspace::Workspace;
 
 pub(crate) fn append_accounts_menu(
@@ -35,9 +34,6 @@ pub(crate) fn append_accounts_menu(
                     .clone()
                     .unwrap_or_else(|| account.label.clone())
             };
-            if is_globally_active && user_login.is_some() {
-                client::accounts::set_active_label(&label).log_err();
-            }
             this = this.custom_entry(
                 move |_window, _cx| {
                     let mut row = h_flex()

@@ -196,6 +196,19 @@ pub fn account_indexes_dir() -> &'static PathBuf {
     }
 }
 
+/// Writes an account index through a temporary file and a rename. The indexes
+/// are shared by every running Lathe instance, and one that read a half-written
+/// file would parse it as empty and could save that over everyone's accounts.
+pub fn write_account_index(path: &Path, contents: &[u8]) -> std::io::Result<()> {
+    let mut temporary = path.as_os_str().to_owned();
+    temporary.push(format!(".tmp-{}", std::process::id()));
+    let temporary = PathBuf::from(temporary);
+    std::fs::write(&temporary, contents)?;
+    std::fs::rename(&temporary, path).inspect_err(|_| {
+        std::fs::remove_file(&temporary).ok();
+    })
+}
+
 /// Returns the path to the configuration directory used by Zed.
 pub fn config_dir() -> &'static PathBuf {
     CONFIG_DIR.get_or_init(|| {

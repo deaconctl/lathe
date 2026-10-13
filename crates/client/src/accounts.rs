@@ -6,7 +6,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::SystemTime;
 
+use futures::AsyncReadExt as _;
 use gpui::AsyncApp;
+use http_client::{AsyncBody, HttpClient as _};
 use util::ResultExt as _;
 
 use crate::Client;
@@ -21,6 +23,10 @@ pub struct CollabAccount {
     pub login: Option<String>,
     #[serde(default)]
     pub avatar_uri: Option<String>,
+    /// GitHub's numeric id for `login`. `user_id` is Zed's own id, which
+    /// GitHub can't use to attribute commits.
+    #[serde(default)]
+    pub github_user_id: Option<u64>,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -100,35 +106,16 @@ pub fn save_index(index: &CollabAccountsIndex) -> Result<()> {
     }
     let bytes = serde_json::to_vec_pretty(index).context("serialize collab accounts index")?;
     *INDEX_CACHE.lock() = None;
-    std::fs::write(&path, bytes).context("write collab_accounts.json")
+    paths::write_account_index(&path, &bytes).context("write collab_accounts.json")
 }
 
-/// Updates the label of the active account if it differs from `label`.
-/// No-op when there is no active account.
-pub fn set_active_label(label: &str) -> Result<()> {
+/// Caches the login + avatar of the account signed in as `user_id` so other
+/// workspaces bound to it can render it in their title bars even when it isn't
+/// the currently-connected account. Keyed by user id rather than the index's
+/// active account because another Lathe instance may have changed that.
+pub fn set_user_info(user_id: u64, login: &str, avatar_uri: &str) -> Result<()> {
     let mut index = load_index();
-    let Some(active_id) = index.active_id.clone() else {
-        return Ok(());
-    };
-    let Some(account) = index.accounts.iter_mut().find(|a| a.id == active_id) else {
-        return Ok(());
-    };
-    if account.label == label {
-        return Ok(());
-    }
-    account.label = label.to_string();
-    save_index(&index)
-}
-
-/// Caches the active account's login + avatar so other workspaces bound to
-/// this account can render it in their title bars even when it isn't the
-/// currently-connected account. No-op when there is no active account.
-pub fn set_active_user_info(login: &str, avatar_uri: &str) -> Result<()> {
-    let mut index = load_index();
-    let Some(active_id) = index.active_id.clone() else {
-        return Ok(());
-    };
-    let Some(account) = index.accounts.iter_mut().find(|a| a.id == active_id) else {
+    let Some(account) = index.accounts.iter_mut().find(|a| a.user_id == user_id) else {
         return Ok(());
     };
     let mut changed = false;
@@ -138,6 +125,7 @@ pub fn set_active_user_info(login: &str, avatar_uri: &str) -> Result<()> {
     }
     if account.login.as_deref() != Some(login) {
         account.login = Some(login.to_string());
+        account.github_user_id = None;
         changed = true;
     }
     if account.avatar_uri.as_deref() != Some(avatar_uri) {
@@ -173,9 +161,72 @@ impl Client {
         load_index().accounts
     }
 
-    /// Returns the id of the currently active saved account, if any.
+    /// Returns the id of the saved account this process is signed in as,
+    /// falling back to the index's active account while signed out. The index
+    /// is shared with other Lathe instances, so its active account can belong
+    /// to another process's session.
     pub fn active_account_id(&self) -> Option<String> {
-        load_index().active_id
+        let index = load_index();
+        if !self.status().borrow().is_signed_out()
+            && let Some(user_id) = self.user_id()
+            && let Some(account) = index.accounts.iter().find(|a| a.user_id == user_id)
+        {
+            return Some(account.id.clone());
+        }
+        index.active_id
+    }
+
+    /// Looks up and caches the GitHub id for the saved account signed in as
+    /// `user_id`, which commit attribution needs and Zed doesn't provide.
+    pub fn refresh_github_user_id(self: &Arc<Self>, user_id: u64, login: String, cx: &AsyncApp) {
+        let already_known = load_index().accounts.iter().any(|account| {
+            account.user_id == user_id
+                && account.login.as_deref() == Some(login.as_str())
+                && account.github_user_id.is_some()
+        });
+        if already_known
+            || login.is_empty()
+            || !login.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+        {
+            return;
+        }
+
+        let http = self.http.clone();
+        let fetch = async move {
+            #[derive(Deserialize)]
+            struct GithubUser {
+                id: u64,
+            }
+
+            let url = format!("https://api.github.com/users/{login}");
+            let mut response = http
+                .get(&url, AsyncBody::default(), true)
+                .await
+                .with_context(|| format!("fetching {url}"))?;
+            let mut body = Vec::new();
+            response.body_mut().read_to_end(&mut body).await?;
+            anyhow::ensure!(
+                response.status().is_success(),
+                "fetching {url}: status {}",
+                response.status()
+            );
+            let github_user: GithubUser =
+                serde_json::from_slice(&body).context("parsing GitHub user")?;
+
+            let mut index = load_index();
+            let Some(account) = index.accounts.iter_mut().find(|account| {
+                account.user_id == user_id && account.login.as_deref() == Some(login.as_str())
+            }) else {
+                return Ok(());
+            };
+            account.github_user_id = Some(github_user.id);
+            save_index(&index)
+        };
+        cx.background_executor()
+            .spawn(async move {
+                fetch.await.log_err();
+            })
+            .detach();
     }
 
     /// Disconnects the current session, marks the given account as active,
@@ -185,7 +236,7 @@ impl Client {
         if index.find(&account_id).is_none() {
             anyhow::bail!("unknown collab account: {account_id}");
         }
-        if index.active_id.as_deref() == Some(&account_id)
+        if self.active_account_id().as_deref() == Some(&account_id)
             && !self.status().borrow().is_signed_out()
         {
             return Ok(());

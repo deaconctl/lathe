@@ -209,7 +209,7 @@ pub fn save_index(index: &AiAccountsIndex) -> Result<()> {
     }
     let bytes = serde_json::to_vec_pretty(index).context("serialize ai accounts index")?;
     *index_cache() = None;
-    std::fs::write(&path, bytes).context("write ai_accounts.json")
+    paths::write_account_index(&path, &bytes).context("write ai_accounts.json")
 }
 
 #[derive(Clone, Copy, Debug)]

@@ -248,7 +248,11 @@ impl ConnectGitHostModal {
         let http_client = cx.http_client();
         let host = self.host.host().to_string();
         let workspace = self.workspace.clone();
-        let task = cx.spawn(async move |this, cx| {
+        // Detached rather than owned by the modal: the user authorizes in the
+        // browser, and clicking back into Lathe dismisses the modal, which
+        // would otherwise cancel polling before the token arrives. The loop
+        // still ends when GitHub reports the code expired or denied.
+        cx.spawn(async move |this, cx| {
             let device = match request_device_code(&http_client).await {
                 Ok(device) => device,
                 Err(error) => {
@@ -311,8 +315,8 @@ impl ConnectGitHostModal {
                     }
                 }
             }
-        });
-        self._task = Some(task);
+        })
+        .detach();
     }
 
     /// Stores a manually-entered credential. The username is only meaningful for

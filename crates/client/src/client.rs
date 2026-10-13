@@ -467,6 +467,7 @@ impl ClientCredentialsProvider {
                 server_url: server_url.clone(),
                 login: existing.as_ref().and_then(|a| a.login.clone()),
                 avatar_uri: existing.as_ref().and_then(|a| a.avatar_uri.clone()),
+                github_user_id: existing.as_ref().and_then(|a| a.github_user_id),
             };
             index.active_id = Some(account.id.clone());
             index.upsert(account);
@@ -519,6 +520,7 @@ impl ClientCredentialsProvider {
                 server_url: server_url.clone(),
                 login: existing.as_ref().and_then(|a| a.login.clone()),
                 avatar_uri: existing.as_ref().and_then(|a| a.avatar_uri.clone()),
+                github_user_id: existing.as_ref().and_then(|a| a.github_user_id),
             });
             index.active_id = Some(account_id);
             accounts::save_index(&index).log_err();
@@ -544,6 +546,9 @@ impl ClientCredentialsProvider {
                     .await
                     .log_err();
                 index.remove(&account.id);
+                // `remove` promotes another saved account, which would make
+                // the next sign-in (or launch) use it without asking.
+                index.active_id = None;
                 accounts::save_index(&index).log_err();
                 Ok(())
             } else {

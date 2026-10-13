@@ -190,7 +190,7 @@ fn save_index(index: &AccountIndex) -> Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    std::fs::write(&path, serde_json::to_vec_pretty(index)?)
+    paths::write_account_index(&path, &serde_json::to_vec_pretty(index)?)
         .with_context(|| format!("writing {}", path.display()))
 }
 

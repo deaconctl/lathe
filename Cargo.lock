@@ -9932,6 +9932,7 @@ version = "0.1.0"
 dependencies = [
  "acp_tools",
  "auto_update",
+ "client",
  "git_graph",
  "gpui",
  "lathe_data_import",
