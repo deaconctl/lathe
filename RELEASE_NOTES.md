@@ -2,6 +2,17 @@
 
 Most recent releases first. Beta releases (`-beta` suffix) ship as GitHub pre-releases and typically batch new features ahead of a stable cut.
 
+## v1.11.1-beta - 2026-10-12
+
+A quick fix for something 1.11.0 broke. If you also have Lathe Stable installed, read this one.
+
+### Fixed
+
+- **Lathe Stable showing "unable to open database file" after Beta 1.11.0.** Beta's first launch "repaired" the database Lathe Stable still shares with Zed, and Stable couldn't open it after that, so it ran without saving anything. Beta now leaves Stable's database alone. Updating doesn't undo what 1.11.0 already did, so if Stable is broken for you, quit it and rename `db.sqlite.before-lathe-repair` back to `db.sqlite` in `~/Library/Application Support/Zed/db/0-stable/`. Nothing gets lost, since Stable hasn't saved anything to that file since the repair.
+- **Add Account signing you back into the old account.** If you added a second account from the title bar menu, switching windows mid-sign-in could cancel the browser sign-in or flip you back to the account you started from. The window now switches to the new account once you've signed in.
+
+---
+
 ## v1.11.0-beta - 2026-10-12
 
 Lathe finally has its own settings and data folders. Up to now it quietly shared them with stock Zed, and that turned out to break both apps. Your stuff comes along automatically on first launch.
