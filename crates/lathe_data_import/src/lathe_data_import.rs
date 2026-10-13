@@ -43,6 +43,12 @@ const LOCK_WAIT: Duration = Duration::from_secs(5);
 /// Zed never reads them, and an older Lathe build may still be using them.
 const ZED_DATABASE_SCOPES: &[&str] = &["stable", "preview", "nightly", "global"];
 
+/// Database scopes owned by a Lathe channel. Older builds of that channel keep
+/// using Zed's copy until they update, so only the channel's own import copies
+/// or repairs it: copying earlier leaves Lathe a stale copy, and repairing
+/// earlier makes the older build fail with "Migration changed".
+const LATHE_CHANNEL_SCOPES: &[&str] = &["stable", "beta"];
+
 /// Migrations Lathe added to domains it shares with upstream. Each entry is the
 /// domain and a fragment of the migration's SQL. Upstream's own steps follow
 /// Lathe's in the stored list, so removing these rows (and renumbering) gives
@@ -131,7 +137,7 @@ pub fn import_from_zed(release_channel: &str, has_custom_data_dir: bool) {
         return;
     };
     let mut report = ImportReport::default();
-    if let Err(error) = import(&roots, &mut report) {
+    if let Err(error) = import(&roots, release_channel, &mut report) {
         report.warn(format!("importing data from Zed failed: {error:#}"));
     }
     *REPORT.lock() = Some(report);
@@ -219,7 +225,7 @@ impl Marker {
     }
 }
 
-fn import(roots: &Roots, report: &mut ImportReport) -> Result<()> {
+fn import(roots: &Roots, release_channel: &str, report: &mut ImportReport) -> Result<()> {
     if !roots.legacy_config.exists() && !roots.legacy_data.exists() {
         return Ok(());
     }
@@ -254,9 +260,12 @@ fn import(roots: &Roots, report: &mut ImportReport) -> Result<()> {
         }
     };
 
-    // Every scope is copied, not just this channel's, so that repairing Zed's
-    // copy of a scope never strips rows another Lathe channel still needs.
-    let database_scopes = legacy_database_scopes(&roots.legacy_data)?;
+    // Scopes no Lathe channel owns are copied by whichever channel imports
+    // first, so that repairing Zed's copy never strips rows Lathe still needs.
+    let database_scopes: Vec<String> = legacy_database_scopes(&roots.legacy_data)?
+        .into_iter()
+        .filter(|scope| !owned_by_other_channel(scope, release_channel))
+        .collect();
     if !marker.adopted_existing {
         if marker.should_attempt("config") {
             let result = copy_config(roots, report);
@@ -308,10 +317,21 @@ fn import(roots: &Roots, report: &mut ImportReport) -> Result<()> {
             let key = database_key(scope);
             if marker.should_attempt(&key) {
                 let relative = database_relative_path(scope);
-                let result = copy_database(
-                    &roots.legacy_data.join(&relative),
-                    &roots.data.join(&relative),
-                );
+                let destination = roots.data.join(&relative);
+                // Lathe Beta 1.11.0's copy predates everything Lathe Stable
+                // wrote since, and nothing has opened it yet.
+                let result = if scope == "stable" && marker.completed.contains("db/0-stable") {
+                    ["", "-wal", "-shm", "-journal"]
+                        .into_iter()
+                        .try_for_each(|suffix| {
+                            remove_if_exists(&path_with_suffix(&destination, suffix))
+                        })
+                } else {
+                    Ok(())
+                };
+                let result = result.and_then(|()| {
+                    copy_database(&roots.legacy_data.join(&relative), &destination)
+                });
                 marker.record(&key, result, report);
                 marker.save(&marker_path)?;
             }
@@ -326,12 +346,15 @@ fn import(roots: &Roots, report: &mut ImportReport) -> Result<()> {
     }
 
     for scope in ZED_DATABASE_SCOPES {
+        if owned_by_other_channel(scope, release_channel) {
+            continue;
+        }
         // Repairing removes Lathe's rows from Zed's copy, so only do it once
         // Lathe has its own copy of that scope.
         let lathe_copy_pending = database_scopes.iter().any(|copied| copied == scope)
             && !marker.adopted_existing
             && !marker.completed.contains(&database_key(scope));
-        let key = format!("repair_zed_db/0-{scope}");
+        let key = repair_key(scope);
         if lathe_copy_pending || !marker.should_attempt(&key) {
             continue;
         }
@@ -371,8 +394,27 @@ fn legacy_database_scopes(legacy_data: &Path) -> Result<Vec<String>> {
     Ok(scopes)
 }
 
+fn owned_by_other_channel(scope: &str, release_channel: &str) -> bool {
+    scope != release_channel && LATHE_CHANNEL_SCOPES.contains(&scope)
+}
+
+// Lathe Beta 1.11.0 copied and repaired the stable scope while Lathe Stable
+// still used Zed's folders, and recorded both under the plain keys. The stable
+// scope's keys differ so Lathe Stable's own import redoes that work.
 fn database_key(scope: &str) -> String {
-    format!("db/0-{scope}")
+    if scope == "stable" {
+        format!("db/0-{scope}/stable")
+    } else {
+        format!("db/0-{scope}")
+    }
+}
+
+fn repair_key(scope: &str) -> String {
+    if scope == "stable" {
+        format!("repair_zed_db/0-{scope}/stable")
+    } else {
+        format!("repair_zed_db/0-{scope}")
+    }
 }
 
 fn database_relative_path(scope: &str) -> PathBuf {
@@ -1127,8 +1169,12 @@ mod tests {
         }
 
         fn import(&self) -> ImportReport {
+            self.import_as("stable")
+        }
+
+        fn import_as(&self, release_channel: &str) -> ImportReport {
             let mut report = ImportReport::default();
-            import(&self.roots, &mut report).expect("import");
+            import(&self.roots, release_channel, &mut report).expect("import");
             report
         }
 
@@ -1491,7 +1537,7 @@ ADD
             fixture
                 .marker()
                 .completed
-                .contains("repair_zed_db/0-stable")
+                .contains(&repair_key("stable"))
         );
         assert!(
             report
@@ -1523,7 +1569,7 @@ ADD
     }
 
     #[test]
-    fn copies_every_scope_but_repairs_only_scopes_zed_uses() {
+    fn each_channel_copies_and_repairs_only_its_own_scope() {
         let fixture = Fixture::new();
         let beta = fixture
             .roots
@@ -1533,17 +1579,55 @@ ADD
             .roots
             .legacy_data
             .join(database_relative_path("stable"));
+        let preview = fixture
+            .roots
+            .legacy_data
+            .join(database_relative_path("preview"));
         create_database(&beta, &shared_database_statements());
         create_database(&stable, &shared_database_statements());
+        create_database(&preview, &shared_database_statements());
+        let lathe_copy = |scope| fixture.roots.data.join(database_relative_path(scope));
 
-        fixture.import();
-
-        for scope in ["beta", "stable"] {
-            let copy = fixture.roots.data.join(database_relative_path(scope));
-            assert_eq!(migration_rows(&copy, "WorkspaceDb").len(), 4, "{scope}");
-        }
+        // An older Lathe Stable still uses Zed's 0-stable, so Beta leaves it
+        // alone.
+        fixture.import_as("beta");
+        assert_eq!(migration_rows(&lathe_copy("beta"), "WorkspaceDb").len(), 4);
+        assert_eq!(migration_rows(&lathe_copy("preview"), "WorkspaceDb").len(), 4);
+        assert!(!lathe_copy("stable").exists());
+        assert_eq!(migration_rows(&stable, "WorkspaceDb").len(), 4);
+        assert_eq!(migration_rows(&preview, "WorkspaceDb").len(), 3);
         // Zed never opens 0-beta, and an older Lathe Beta may still use it.
         assert_eq!(migration_rows(&beta, "WorkspaceDb").len(), 4);
+
+        fixture.import_as("stable");
+        assert_eq!(migration_rows(&lathe_copy("stable"), "WorkspaceDb").len(), 4);
+        assert_eq!(migration_rows(&stable, "WorkspaceDb").len(), 3);
+        assert_eq!(migration_rows(&beta, "WorkspaceDb").len(), 4);
+    }
+
+    #[test]
+    fn stable_redoes_stable_scope_imported_by_beta_1_11_0() {
+        let fixture = Fixture::new();
+        let stable = fixture
+            .roots
+            .legacy_data
+            .join(database_relative_path("stable"));
+        create_database(&stable, &shared_database_statements());
+        let lathe_copy = fixture.roots.data.join(database_relative_path("stable"));
+        create_database(&lathe_copy, &["CREATE TABLE stale (id INTEGER)"]);
+        Marker {
+            completed: ["db/0-stable", "repair_zed_db/0-stable"]
+                .into_iter()
+                .map(String::from)
+                .collect(),
+            ..Marker::default()
+        }
+        .save(&fixture.roots.data.join(MARKER_FILE_NAME))
+        .expect("save marker");
+
+        fixture.import_as("stable");
+
+        assert_eq!(migration_rows(&lathe_copy, "WorkspaceDb").len(), 4);
         assert_eq!(migration_rows(&stable, "WorkspaceDb").len(), 3);
     }
 
