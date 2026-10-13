@@ -2,14 +2,36 @@
 
 Most recent releases first. Beta releases (`-beta` suffix) ship as GitHub pre-releases and typically batch new features ahead of a stable cut.
 
-## v1.11.1-beta - 2026-10-12
+## v1.11.2-beta - 2026-10-13
 
-A quick fix for something 1.11.0 broke. If you also have Lathe Stable installed, read this one.
+Mostly fixes. 1.11.1 never went out, so its two fixes are in here too. If you also have Lathe Stable installed, read the first one.
 
 ### Fixed
 
 - **Lathe Stable showing "unable to open database file" after Beta 1.11.0.** Beta's first launch "repaired" the database Lathe Stable still shares with Zed, and Stable couldn't open it after that, so it ran without saving anything. Beta now leaves Stable's database alone. Updating doesn't undo what 1.11.0 already did, so if Stable is broken for you, quit it and rename `db.sqlite.before-lathe-repair` back to `db.sqlite` in `~/Library/Application Support/Zed/db/0-stable/`. Nothing gets lost, since Stable hasn't saved anything to that file since the repair.
-- **Add Account signing you back into the old account.** If you added a second account from the title bar menu, switching windows mid-sign-in could cancel the browser sign-in or flip you back to the account you started from. The window now switches to the new account once you've signed in.
+- **Add Account not adding the account.** The browser said you were signed in, but Lathe kept the old account. Switching back to Lathe mid-sign-in canceled it. Same thing happened from the command palette.
+- **Commits credited to the wrong GitHub user.** Workspaces tied to a collab account were writing a GitHub noreply email built from your Zed id, not your GitHub id, so GitHub didn't link the commits to you. Fixed. Lathe now looks up the real id, and until it has it your git config is used instead.
+- **Sign Out quietly switching you to your other account.** Signing out of one saved account made the other one active, so the next sign-in (or restart) used it without asking.
+- Running Beta and Stable side by side could swap account names and avatars between them, or flip windows back and forth between accounts.
+- **Connecting GitHub for pull requests.** Clicking anywhere outside the dialog after approving in the browser threw the sign-in away.
+- Adding a Codex or API-key AI account didn't take effect until you restarted the agent.
+- **Rainbow parameter colors** were back to coloring every parameter the same. An upstream merge dropped them again.
+- `cmd-+` / `cmd--` / `cmd-0` in the markdown preview zoomed only the preview, not the window.
+- **Compact terminal cards** had lost their button and stopped doing anything. Both are back.
+- **Save Workspace** and **Save Workspace As…** are back in the File menu.
+- Stop Metro and Stop Spotlight in the Mobile panel didn't do anything. Now they close the terminal and stop the process.
+
+### Linux
+
+- Lathe's data moves to `~/.local/share/lathe-data`. It was in `~/.local/share/lathe`, which is also where the installer puts Lathe Stable and wipes on every update. That would've deleted everything the first time Stable updated. The move happens on first launch.
+- `uninstall.sh` was removing Zed's folders instead of Lathe's.
+
+### Under the hood
+
+- If copying something from Zed failed on first launch, the retry could give you an empty database and call it done. It now retries properly.
+- When Lathe Stable moves to its own folders, it picks up whatever it changed in Zed's folders after Beta copied them, so your newer settings and threads come with it.
+- Deleting an older AI account no longer deletes files that Lathe Stable 1.8 still uses.
+- Removed a few leftovers from upstream that showed up in settings or keymaps but did nothing.
 
 ---
 
