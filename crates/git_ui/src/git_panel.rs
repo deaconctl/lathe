@@ -102,7 +102,7 @@ use util::paths::PathStyle;
 use util::{ResultExt, TryFutureExt, markdown::MarkdownInlineCode, maybe, rel_path::RelPath};
 use workspace::SERIALIZATION_THROTTLE_TIME;
 use workspace::{
-    Item, ModalView, Workspace,
+    FloatingLayout, Item, ModalView, Workspace,
     dock::{DockPosition, Panel, PanelEvent},
     notifications::{DetachAndPromptErr, NotificationId, NotifyResultExt, NotifyTaskExt},
 };
@@ -6799,6 +6799,7 @@ impl GitPanel {
             });
 
         let collapsed = self.commit_editor_collapsed;
+        let floating = FloatingLayout::get(cx);
         let toggle_commit_editor_button = {
             let (icon, label) = if collapsed {
                 (IconName::ChevronUp, "Show Commit Editor")
@@ -6882,7 +6883,10 @@ impl GitPanel {
                     .relative()
                     .w_full()
                     .when(self.commit_editor_expanded, |this| this.flex_1().min_h_0())
-                    .border_t_1()
+                    .map(|this| match floating {
+                        Some(floating) => this.rounded(floating.radius).border_1(),
+                        None => this.border_t_1(),
+                    })
                     .border_color(if title_exceeds_limit {
                         cx.theme().status().warning_border
                     } else {

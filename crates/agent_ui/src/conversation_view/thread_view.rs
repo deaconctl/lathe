@@ -49,7 +49,7 @@ use ui::{
 };
 use url::Url;
 use util::markdown::source_position_from_fragment;
-use workspace::{OpenOptions, SERIALIZATION_THROTTLE_TIME};
+use workspace::{FloatingLayout, OpenOptions, SERIALIZATION_THROTTLE_TIME};
 
 use super::elicitation::{
     ElicitationCard, ElicitationCardHandlers, ElicitationFormState, should_render_elicitation,
@@ -5059,6 +5059,7 @@ impl ThreadView {
         let max_content_width = AgentSettings::get_global(cx).max_content_width;
         let has_messages = self.list_state.item_count() > 0;
         let fills_container = !has_messages || editor_expanded;
+        let floating = FloatingLayout::get(cx);
         let composer_is_read_only = self.message_editor.read(cx).editor().read(cx).read_only(cx);
         let discard_draft_button = composer_is_read_only.then(|| {
             div()
@@ -5085,12 +5086,21 @@ impl ThreadView {
             .map(|this| {
                 if has_messages {
                     this.on_action(cx.listener(Self::expand_message_editor))
-                        .border_t_1()
-                        .border_color(cx.theme().colors().border)
+                        .when(floating.is_none(), |this| {
+                            this.border_t_1().border_color(cx.theme().colors().border)
+                        })
                         .when(editor_expanded, |this| this.h(vh(0.8, window)))
                 } else {
                     this.flex_1().size_full()
                 }
+            })
+            // The dock leaves no inset below a card's content, so the editor
+            // needs its own bottom margin for its lower edge to be visible.
+            .when_some(floating, |this, floating| {
+                this.mb(floating.content_inset())
+                    .rounded(floating.radius)
+                    .border_1()
+                    .border_color(cx.theme().colors().border)
             })
             .child(
                 v_flex()
