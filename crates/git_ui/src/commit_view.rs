@@ -75,6 +75,9 @@ pub fn init(cx: &mut App) {
 
 pub struct CommitView {
     commit: CommitDetails,
+    /// When set, this view shows the diff from `range_base` to `commit`
+    /// instead of the diff `commit` introduced over its first parent.
+    range_base: Option<CommitDetails>,
     editor: Entity<SplittableEditor>,
     message: Entity<Markdown>,
     message_expanded: bool,
@@ -179,6 +182,10 @@ impl Addon for CommitDiffAddon {
 
 const FILE_NAMESPACE_SORT_PREFIX: u64 = 1;
 
+fn short_sha(sha: &str) -> &str {
+    sha.get(..git::SHORT_SHA_LENGTH).unwrap_or(sha)
+}
+
 impl CommitView {
     pub fn open(
         commit_sha: String,
@@ -191,6 +198,7 @@ impl CommitView {
     ) {
         Self::open_with_options(
             commit_sha,
+            None,
             repo,
             workspace,
             stash,
@@ -201,8 +209,32 @@ impl CommitView {
         )
     }
 
+    /// Opens the diff between two arbitrary commits, with `base_sha` as the
+    /// old side and `head_sha` as the new side.
+    pub fn open_range(
+        base_sha: String,
+        head_sha: String,
+        repo: WeakEntity<Repository>,
+        workspace: WeakEntity<Workspace>,
+        window: &mut Window,
+        cx: &mut App,
+    ) {
+        Self::open_with_options(
+            head_sha,
+            Some(base_sha),
+            repo,
+            workspace,
+            None,
+            None,
+            false,
+            window,
+            cx,
+        )
+    }
+
     fn open_with_options(
         commit_sha: String,
+        range_base: Option<String>,
         repo: WeakEntity<Repository>,
         workspace: WeakEntity<Workspace>,
         stash: Option<usize>,
@@ -212,13 +244,21 @@ impl CommitView {
         cx: &mut App,
     ) {
         let commit_diff = repo
-            .update(cx, |repo, cx| {
-                repo.load_commit_diff(commit_sha.clone(), ignore_shallow_boundary, cx)
+            .update(cx, |repo, cx| match &range_base {
+                Some(base_sha) => repo.load_range_diff(base_sha.clone(), commit_sha.clone(), cx),
+                None => repo.load_commit_diff(commit_sha.clone(), ignore_shallow_boundary, cx),
             })
             .ok();
         let commit_details = repo
             .update(cx, |repo, cx| repo.show_commit(commit_sha.clone(), cx))
             .ok();
+        let base_details = match &range_base {
+            Some(base_sha) => Some(
+                repo.update(cx, |repo, cx| repo.show_commit(base_sha.clone(), cx))
+                    .ok(),
+            ),
+            None => None,
+        };
 
         window
             .spawn(cx, async move |cx| {
@@ -227,6 +267,10 @@ impl CommitView {
                 let (commit_diff, commit_details) = futures::join!(commit_diff, commit_details);
                 let mut commit_diff = commit_diff.log_err()?;
                 let commit_details = commit_details.log_err()?;
+                let base_details = match base_details {
+                    Some(base_details) => Some(base_details?.await.log_err()?),
+                    None => None,
+                };
 
                 // Filter to specific file if requested
                 if let Some(ref filter_path) = file_filter {
@@ -243,6 +287,7 @@ impl CommitView {
                         let commit_view = cx.new(|cx| {
                             CommitView::new(
                                 commit_details,
+                                base_details,
                                 commit_diff,
                                 repo,
                                 project.clone(),
@@ -259,14 +304,17 @@ impl CommitView {
                         pane.update(cx, |pane, cx| {
                             let ix = pane.items().position(|item| {
                                 let commit_view = item.downcast::<CommitView>();
-                                commit_view
-                                    .is_some_and(|view| view.read(cx).commit.sha == commit_sha)
+                                commit_view.is_some_and(|view| {
+                                    view.read(cx).shows(&commit_sha, range_base.as_deref())
+                                })
                             });
                             if let Some(ix) = ix {
                                 let existing = pane
                                     .items()
                                     .filter_map(|item| item.downcast::<CommitView>())
-                                    .find(|view| view.read(cx).commit.sha == commit_sha)
+                                    .find(|view| {
+                                        view.read(cx).shows(&commit_sha, range_base.as_deref())
+                                    })
                                     .unwrap();
 
                                 pane.remove_item(existing.item_id(), false, false, window, cx);
@@ -290,6 +338,7 @@ impl CommitView {
 
     fn new(
         commit: CommitDetails,
+        range_base: Option<CommitDetails>,
         commit_diff: CommitDiff,
         repository: Entity<Repository>,
         project: Entity<Project>,
@@ -336,7 +385,10 @@ impl CommitView {
 
             editor
         });
-        let commit_sha = Arc::<str>::from(commit.sha.as_ref());
+        let short_label: Arc<str> = match &range_base {
+            Some(base) => format!("{}..{}", short_sha(&base.sha), short_sha(&commit.sha)).into(),
+            None => short_sha(&commit.sha).into(),
+        };
 
         let repository_clone = repository.clone();
         let project_clone = project.clone();
@@ -369,15 +421,12 @@ impl CommitView {
                         )
                     })
                     .context("project has no worktrees")?;
-                let short_sha = commit_sha
-                    .get(0..git::SHORT_SHA_LENGTH)
-                    .unwrap_or(&commit_sha);
                 let file_name = file
                     .path
                     .file_name()
                     .map(|name| name.to_string())
                     .unwrap_or_else(|| file.path.display(PathStyle::local()).to_string());
-                let display_name = format!("{short_sha} - {file_name}");
+                let display_name = format!("{short_label} - {file_name}");
 
                 let file = Arc::new(GitBlob {
                     path: file.path.clone(),
@@ -515,6 +564,7 @@ impl CommitView {
 
         Self {
             commit,
+            range_base,
             editor,
             message,
             message_expanded: false,
@@ -529,6 +579,11 @@ impl CommitView {
             file_filter,
             _load_diff_task: load_diff_task,
         }
+    }
+
+    fn shows(&self, commit_sha: &str, range_base: Option<&str>) -> bool {
+        self.commit.sha.as_ref() == commit_sha
+            && self.range_base.as_ref().map(|base| base.sha.as_ref()) == range_base
     }
 
     fn render_shallow_boundary_notice(&self, cx: &App) -> impl IntoElement {
@@ -595,6 +650,7 @@ impl CommitView {
                                             cx.update(|window, cx| {
                                                 Self::open_with_options(
                                                     commit_sha,
+                                                    None,
                                                     repository,
                                                     workspace,
                                                     stash,
@@ -627,6 +683,7 @@ impl CommitView {
                             .on_click(move |_, window, cx| {
                                 Self::open_with_options(
                                     commit_sha.clone(),
+                                    None,
                                     repository.downgrade(),
                                     workspace.clone(),
                                     stash,
@@ -706,7 +763,103 @@ impl CommitView {
         self.open_file_at_head(&file, window, cx);
     }
 
-    fn render_header(&self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_range_header(&self, base: &CommitDetails, cx: &mut Context<Self>) -> AnyElement {
+        let local_offset = time::UtcOffset::current_local_offset().unwrap_or(time::UtcOffset::UTC);
+        let commit_row = |label: &'static str, commit: &CommitDetails| {
+            let commit_date = time::OffsetDateTime::from_unix_timestamp(commit.commit_timestamp)
+                .unwrap_or_else(|_| time::OffsetDateTime::now_utc());
+            let date_string = time_format::format_localized_timestamp(
+                commit_date,
+                time::OffsetDateTime::now_utc(),
+                local_offset,
+                time_format::TimestampFormat::MediumAbsolute,
+            );
+            let subject = commit
+                .message
+                .lines()
+                .next()
+                .unwrap_or_default()
+                .to_string();
+            h_flex()
+                .gap_1p5()
+                .min_w_0()
+                .child(Label::new(label).color(Color::Muted).size(LabelSize::Small))
+                .child(
+                    Label::new(short_sha(&commit.sha).to_string())
+                        .buffer_font(cx)
+                        .size(LabelSize::Small),
+                )
+                .child(Label::new(subject).truncate())
+                .child(
+                    Label::new(format!("{} • {}", commit.author_name, date_string))
+                        .color(Color::Muted)
+                        .size(LabelSize::Small),
+                )
+        };
+
+        let base_sha = base.sha.to_string();
+        let head_sha = self.commit.sha.to_string();
+        let repository = self.repository.downgrade();
+        let workspace = self.workspace.clone();
+        let commit_view = cx.weak_entity();
+
+        h_flex()
+            .w_full()
+            .py_2p5()
+            .px_2p5()
+            .gap_2()
+            .justify_between()
+            .border_b_1()
+            .border_color(cx.theme().colors().border_variant)
+            .child(
+                v_flex()
+                    .min_w_0()
+                    .gap_0p5()
+                    .child(commit_row("From", base))
+                    .child(commit_row("To", &self.commit)),
+            )
+            .child(
+                Button::new("swap-range", "Swap Sides")
+                    .start_icon(
+                        Icon::new(IconName::ArrowRightLeft)
+                            .size(IconSize::Small)
+                            .color(Color::Muted),
+                    )
+                    .tooltip(Tooltip::text("Show the diff in the opposite direction"))
+                    .on_click(move |_, window, cx| {
+                        Self::open_range(
+                            head_sha.clone(),
+                            base_sha.clone(),
+                            repository.clone(),
+                            workspace.clone(),
+                            window,
+                            cx,
+                        );
+                        if let Some(commit_view) = commit_view.upgrade()
+                            && let Some(workspace) = workspace.upgrade()
+                        {
+                            let pane = workspace.read(cx).pane_for(&commit_view);
+                            if let Some(pane) = pane {
+                                pane.update(cx, |pane, cx| {
+                                    pane.remove_item(
+                                        commit_view.item_id(),
+                                        false,
+                                        false,
+                                        window,
+                                        cx,
+                                    );
+                                });
+                            }
+                        }
+                    }),
+            )
+            .into_any_element()
+    }
+
+    fn render_header(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        if let Some(base) = &self.range_base {
+            return self.render_range_header(base, cx);
+        }
         let commit = &self.commit;
         let author_name = commit.author_name.clone();
         let author_email = commit.author_email.clone();
@@ -857,6 +1010,7 @@ impl CommitView {
                     }),
             )
             .children(self.render_commit_message(avatar_container_width, window, cx))
+            .into_any_element()
     }
 
     fn render_commit_message(
@@ -1190,12 +1344,25 @@ impl Item for CommitView {
     }
 
     fn tab_content_text(&self, _detail: usize, _cx: &App) -> SharedString {
+        if let Some(base) = &self.range_base {
+            return format!("{}..{}", short_sha(&base.sha), short_sha(&self.commit.sha)).into();
+        }
         let short_sha = self.commit.sha.get(0..7).unwrap_or(&*self.commit.sha);
         let subject = truncate_and_trailoff(self.commit.message.split('\n').next().unwrap(), 20);
         format!("{short_sha} — {subject}").into()
     }
 
     fn tab_tooltip_content(&self, _: &App) -> Option<TabTooltipContent> {
+        if let Some(base) = &self.range_base {
+            return Some(TabTooltipContent::Text(
+                format!(
+                    "Changes from {} to {}",
+                    short_sha(&base.sha),
+                    short_sha(&self.commit.sha)
+                )
+                .into(),
+            ));
+        }
         let short_sha = self.commit.sha.get(0..16).unwrap_or(&*self.commit.sha);
         let subject = self.commit.message.split('\n').next().unwrap();
 
@@ -1368,6 +1535,7 @@ impl Item for CommitView {
                 message_scroll_handle: ScrollHandle::new(),
                 multibuffer: self.multibuffer.clone(),
                 commit: self.commit.clone(),
+                range_base: self.range_base.clone(),
                 stash: self.stash,
                 repository: self.repository.clone(),
                 project: self.project.clone(),

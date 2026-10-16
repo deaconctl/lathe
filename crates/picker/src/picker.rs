@@ -262,6 +262,12 @@ pub trait PickerDelegate: Sized + 'static {
     fn supports_multi_select(&self) -> bool {
         false
     }
+    /// Whether a plain click toggles the clicked item in the multi-selection
+    /// instead of confirming it. For pickers whose whole purpose is choosing
+    /// several items, where confirming on the first click would be a surprise.
+    fn click_toggles_selection(&self) -> bool {
+        false
+    }
     /// Whether the item at `ix` is part of the current multi-selection.
     fn is_item_selected(&self, _ix: usize) -> bool {
         false
@@ -1162,7 +1168,12 @@ impl<D: PickerDelegate> Picker<D> {
             return;
         }
         self.set_selected_index(ix, None, false, window, cx);
-        if self.delegate.supports_multi_select() && (secondary || self.select_instead_of_open) {
+        if self.delegate.supports_multi_select() && self.delegate.click_toggles_selection() {
+            self.delegate.toggle_item_selected(ix, window, cx);
+            cx.notify();
+        } else if self.delegate.supports_multi_select()
+            && (secondary || self.select_instead_of_open)
+        {
             self.select_instead_of_open = true;
             self.delegate.toggle_item_selected(ix, window, cx);
             cx.notify();
@@ -1662,6 +1673,7 @@ mod tests {
         confirmations: Vec<(usize, bool)>,
         match_update: Option<(Duration, usize)>,
         supports_multi_select: bool,
+        click_toggles_selection: bool,
         selected_items: Vec<usize>,
         multi_confirmed: Rc<Cell<Option<Vec<usize>>>>,
     }
@@ -1675,6 +1687,7 @@ mod tests {
                 confirmations: Vec::new(),
                 match_update: None,
                 supports_multi_select: false,
+                click_toggles_selection: false,
                 selected_items: Vec::new(),
                 multi_confirmed: Rc::new(Cell::new(None)),
             }
@@ -1755,6 +1768,10 @@ mod tests {
 
         fn supports_multi_select(&self) -> bool {
             self.supports_multi_select
+        }
+
+        fn click_toggles_selection(&self) -> bool {
+            self.click_toggles_selection
         }
 
         fn is_item_selected(&self, ix: usize) -> bool {
@@ -2000,6 +2017,48 @@ mod tests {
             Some(1),
             "the mode should be off again after confirming"
         );
+    }
+
+    #[gpui::test]
+    async fn test_click_toggles_selection_never_confirms_on_click(cx: &mut TestAppContext) {
+        init_test(cx);
+
+        let confirmed_index = Rc::new(Cell::new(None));
+        let multi_confirmed = Rc::new(Cell::new(None));
+        let (picker, cx) = cx.add_window_view(|window, cx| {
+            let mut delegate = TestDelegate::new(vec![true, true, true]).with_multi_select();
+            delegate.click_toggles_selection = true;
+            delegate.confirmed_index = confirmed_index.clone();
+            delegate.multi_confirmed = multi_confirmed.clone();
+            Picker::uniform_list(delegate, window, cx)
+        });
+
+        picker.update_in(cx, |picker, window, cx| {
+            picker.handle_click(1, false, window, cx);
+            picker.handle_click(2, false, window, cx);
+        });
+        assert_eq!(
+            confirmed_index.take(),
+            None,
+            "plain clicks must not confirm"
+        );
+        picker.update(cx, |picker, _cx| {
+            assert!(picker.delegate.is_item_selected(1));
+            assert!(picker.delegate.is_item_selected(2));
+        });
+
+        // Clicking a ticked item again unticks it.
+        picker.update_in(cx, |picker, window, cx| {
+            picker.handle_click(1, false, window, cx);
+        });
+        picker.update(cx, |picker, _cx| {
+            assert!(!picker.delegate.is_item_selected(1));
+        });
+
+        picker.update_in(cx, |picker, window, cx| {
+            picker.do_confirm(false, window, cx);
+        });
+        assert_eq!(multi_confirmed.take(), Some(vec![2]));
     }
 
     #[gpui::test]
