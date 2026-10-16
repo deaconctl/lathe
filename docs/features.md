@@ -8,14 +8,17 @@ Roughly ordered by how far each one is from stock Zed. One caveat on the git ent
 
 1. [Mobile development](#mobile-development-expo--react-native) - a panel for Expo and bare React Native projects
 2. [Merge conflicts and interactive rebase](#merge-conflicts-and-interactive-rebase) - a conflict resolution tab, full-file split view, drag-and-drop rebase
-3. [Pull request reviews](#pull-request-reviews) - GitHub, GitLab, Bitbucket, in the editor
+3. [Pull request reviews](#pull-request-reviews) - GitHub, GitLab, Bitbucket, in the editor, with several accounts per host
 4. [Code navigation](#code-navigation) - definitions and references open in a peek instead of a new tab
 5. [AI agent integration](#ai-agent-integration) - multi-account sign-in, approval control
 6. [Theme and syntax highlighting](#theme-and-syntax-highlighting) - the default theme, plus a live customizer for all 200+ colors
-7. [Git additions](#git-additions) - explorer tab, branch tree, undo, Git Flow
+7. [Git additions](#git-additions) - explorer tab, branch tree, compare any two commits, multi-select, undo, Git Flow
 8. [Jupyter notebooks](#jupyter-notebooks) - a setting you can flip, instead of upstream's server-side feature flag
-9. [Terminal, windows, and workspaces](#terminal-windows-and-workspaces) - extra windows for editors and terminals, an awaiting-input indicator, workspace groups, per-window zoom
-10. [AWS profiles](#aws-profiles) - a per-window profile selector
+9. [Docks and panels](#docks-and-panels) - two panels per dock, drag panels to any dock, every panel allowed in the bottom dock
+10. [Terminal, windows, and workspaces](#terminal-windows-and-workspaces) - extra windows for editors and terminals, an awaiting-input indicator, workspace groups, per-window zoom
+11. [Editor additions](#editor-additions) - color swatches and a color picker, Open Recent File, project panel refresh
+12. [AWS profiles](#aws-profiles) - a per-window profile selector
+13. [Separate data from Zed](#separate-data-from-zed) - Lathe's own settings and data folders, imported from Zed on first launch
 
 ---
 
@@ -58,7 +61,12 @@ A pull request panel for GitHub, GitLab, and Bitbucket, including GitHub Enterpr
 
 Every git repository in the workspace gets its own collapsible section, headed by the repo name and its open count. So a workspace holding a backend and a frontend shows you both at once instead of whichever one happens to be active.
 
-Past reviewing: request reviewers, merge or squash and merge, flip a PR between draft and ready, close it or reopen it. On a pull request you didn't open, those author-only actions live under a **More** menu instead of in the button row, so a merge or a decline is never one stray click away from a review verdict. There's a separate section for PRs you authored, with reviewer roll-ups showing where each one stands. `pull_request_panel.button` hides the panel button if you don't want it.
+Past reviewing: request reviewers, merge or squash and merge, flip a PR between draft and ready, close it or reopen it. On a pull request you didn't open, those author-only actions live under a **More** menu instead of in the button row, so a merge or a decline is never one stray click away from a review verdict. There's a separate section for PRs you authored, with reviewer roll-ups showing where each one stands. Sections can be dragged to whatever height you want; double-click a divider to reset it. `pull_request_panel.button` hides the panel button if you don't want it.
+
+Picking reviewers is a checklist, not a one-click send: clicking a person ticks them, and the footer's **Request** button sends the whole batch (**Clear** unticks everyone).
+
+### Several accounts per git host
+Add a second GitHub, GitLab, or Bitbucket account from the account menu and pick which one each workspace uses. Pull requests, reviews, and the reviewer picker all follow that choice, so a work repo and a personal repo can sit on different identities in side-by-side windows. An existing connection carries over as the first account without signing in again.
 
 ---
 
@@ -122,6 +130,12 @@ Lathe adds a third **Explorer** tab to the git panel, next to upstream's Changes
 ### Branch and commit context menus
 Right-click a branch: checkout, **Branch from here**, copy branch name, merge into the current branch, rebase the current branch onto it, delete. Right-click a commit and you additionally get tag creation, cherry-pick onto the current branch, drop, revert, the three reset modes, rebase onto that commit, and copy of the full or short SHA. Menu labels name the branch they're about to act on instead of saying "the current branch", so a reset reads as **Reset main to here (hard, discard changes)** before you click it. Not after.
 
+### Compare any two commits
+In the git graph, Cmd-click a second commit, then right-click and choose **Compare Commits** to see everything that changed between them. They don't have to be adjacent or even on the same branch. The diff has a button to swap which side is old and which is new. The single-commit entry is labeled **View Diff Against Parent** so the two are easy to tell apart.
+
+### Multi-select in the git panel
+Shift-click and Cmd-click to mark several files in the Changes list, then stage, unstage, discard, stash, or open them together.
+
 ### Undo for destructive operations
 Branch resets, deletes, renames, and tag creation all record an undo entry, and the toast you get afterward has a one-click **Undo** on it. Discards stash defensively first, so those can be restored too. 50 entries kept per repository.
 
@@ -181,6 +195,21 @@ It's still experimental, and honestly so: none of it has been through a proper v
 
 ---
 
+## Docks and panels
+
+### Two panels per dock
+Cmd-click a second panel's button and it opens under the first (or beside it, in the bottom dock), with a divider you can drag. Double-click the divider for 50/50. Clicking the button of a panel that's sharing a dock closes just that panel, and clicking it again puts it back where it was, same divider and all. The split is saved per workspace.
+
+### Drag panels where you want them
+Drag a panel's button off the status bar and drop zones show up for each half of each dock. Right-click a button and **Move to** does the same thing without the drag. Every panel can go in the bottom dock, including Project, Git, Outline, Pull Requests, Collab, and Agent. Mobile Dev is the exception in the other direction: it only goes in the bottom dock, because device logs need the width.
+
+### Closing a whole dock
+Each open dock gets a close button next to its panel buttons, and every panel button's right-click menu has **Close Left Panels** (or Right, or Bottom). Reopening brings back the same panels at the same sizes.
+
+Panels can't go in the editor area as tabs yet.
+
+---
+
 ## Terminal, windows, and workspaces
 
 ### Additional windows for editors and terminals
@@ -223,8 +252,29 @@ Sign into more than one Zed Cloud account and switch between them from the avata
 
 ---
 
+## Editor additions
+
+### Color swatches and a color picker
+Hex, `0x` hex, `rgb()`, and `hsl()` values get a small swatch in front of them, with or without a language server. Click the swatch (or right-click and choose **Pick Color**) to adjust the color; the new value is written back in the same notation as one undo step. An all-digit `#123` in Markdown or a commit message is left alone, since that's usually an issue number.
+
+### Open Recent File
+**Open Recent File** in the File menu and on the welcome page (`alt-cmd-shift-o` on macOS) reopens files you've had open recently, not just projects.
+
+### Project panel refresh
+**Refresh** in the project panel's right-click menu re-reads the tree from disk, for the times a file watcher misses something.
+
+---
+
 ## AWS profiles
 
 A status-bar AWS profile selector, scoped per window, so two windows can target different accounts at once. Everything Lathe spawns (terminals, tasks) inherits the selected `AWS_PROFILE`. The menu only lists profiles you've used in this workspace and puts the rest behind **Show All Profiles**, and it polls SSO session status so an expired login is visible before a command fails on you. A project-local `.aws/config` takes over from the global one when there is one. The whole selector stays hidden unless the machine actually has AWS profiles configured.
 
 That same menu creates a new SSO profile through a wizard, opens the AWS config file for editing, appends a `credential_process` wrapper profile for tooling that still expects SDK v2 credentials, and deactivates the current selection.
+
+---
+
+## Separate data from Zed
+
+Lathe used to share Zed's folders, so the two apps overwrote each other's settings, databases, and language server downloads. As of 1.12 Lathe keeps its own: `~/.config/lathe` and `~/Library/Application Support/Lathe` on macOS, the `lathe` equivalents on Windows, and `~/.local/share/lathe-data` on Linux (not `~/.local/share/lathe`, which is the install folder and gets wiped on every update).
+
+First launch copies settings, keymaps, themes, extensions, history, and accounts over from Zed's folders. It takes about a second and shouldn't require signing in to anything again; if an account's credentials can't be carried over, Lathe names which one. After that the two apps don't see each other's changes. AI accounts added before 1.11 keep their files in Zed's folder and keep working from there.
