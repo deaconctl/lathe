@@ -2,6 +2,90 @@
 
 Most recent releases first. Beta releases (`-beta` suffix) ship as GitHub pre-releases and typically batch new features ahead of a stable cut.
 
+## v1.12.0 - 2026-10-16
+
+The first stable release since 1.8.0. Everything from the 1.9.0, 1.10.0, 1.10.1, 1.11.0 and 1.11.2 betas is in here, plus commit comparison in the git graph and a change to how update checks work.
+
+The biggest change is under the hood: Lathe now has its own settings and data folders instead of sharing Zed's. Your settings, history and accounts come along on first launch. Read **Before you update** if you've also been running Lathe Beta.
+
+### Before you update
+
+- **If you ran Beta 1.11.0 and Stable 1.8 has been saying "unable to open database file":** Beta 1.11.0 "repaired" the database Stable shares with Zed, and Stable couldn't open it after that. Quit Lathe, then rename `db.sqlite.before-lathe-repair` back to `db.sqlite` in `~/Library/Application Support/Zed/db/0-stable/` before updating, so your recent projects and history come with you. Nothing gets lost, since Stable hasn't saved anything to the repaired file.
+
+### Added
+
+- **Lathe keeps its own data.** Settings, keymaps, themes, extensions, history and accounts now live in Lathe's own folders (`~/.config/lathe` and `~/Library/Application Support/Lathe` on macOS, the `lathe` equivalents on Windows, `~/.local/share/lathe-data` on Linux). First launch copies everything over from Zed's folders. It takes about a second, and you shouldn't need to sign in to anything again. If an account's sign-in can't be carried over, Lathe tells you which one.
+- **Compare any two commits.** In the git graph, Cmd-click a second commit, then right-click and choose **Compare Commits** to see everything that changed between them. They don't have to be next to each other or on the same branch. The diff has a button to swap which side is old and which is new. The existing entry is now called **View Diff Against Parent** to tell the two apart.
+- **Two panels per dock.** Cmd-click a second panel's button and it opens under the first (or beside it, in the bottom dock), with a divider you can drag. Double-click the divider for 50/50. The split is saved per workspace.
+- **Drag panels where you want them.** Drag a panel's button off the status bar and drop zones show up for each half of each dock, or right-click a button and use **Move to**. Every panel can go in the bottom dock now, including Project, Git, Outline, Pull Requests, Collab and Agent.
+- A close button next to each open dock's panel buttons, plus **Close Left Panels** (or Right, Bottom) on every button's right-click menu. Reopening brings back the same panels in the same sizes.
+- **Several accounts per git host.** Add a second GitHub, GitLab or Bitbucket account from the account menu and pick which one each workspace uses. Pull requests, reviews and the reviewer picker all follow that choice. Your existing connection carries over as the first account.
+- **Color swatches and a color picker.** Hex, `0x` hex and `rgb()` / `hsl()` values get a swatch in front of them. Click it (or right-click and choose **Pick Color**) to adjust the color, and the new value is written back in the same notation.
+- **The git graph caught up with upstream.** Ref badges sit in a gutter beside the lanes, columns can be hidden from the header's right-click menu, commit details collapse, changed files show as a tree or a flat list, and the graph remembers its state across restarts. Dragging branches and commits still works: drop a branch anywhere on a commit's row, and the drag shows the branch name or short hash.
+- **File history in the graph.** "View History in Git Graph" in the git panel's right-click menu.
+- The commit right-click menu has **Copy Tag** and a **Custom Commands** section for your git tasks. You can create a tag at HEAD or on any commit from the graph.
+- **Multi-select in the git panel.** Shift-click and Cmd-click to mark files, then stage, unstage, discard, stash or open them together. Section headers show file counts, folders in tree view get their own right-click menu, and the commit editor can collapse.
+- **Open Recent File** in the File menu and on the welcome page (`alt-cmd-shift-o` on macOS).
+- **Linux AppImage** for x86_64 and aarch64. `chmod +x` it and run it. No libfuse2 needed, and in-app updates replace the file in place.
+- **Refresh** in the project panel's right-click menu re-reads the tree from disk.
+- Pull request panel sections can be resized. Double-click a divider to reset it.
+- Gitiles and self-hosted Gerrit work as git hosts, permalinks included.
+- The file finder prefills with your selected text. `alt-/` shows which bindings can finish a half-typed key chord. Markdown preview tabs have **Show Source**.
+- New settings: `soft_wrap_indent`, `markdown_preview.heading_font_weight`, and a font family for Mermaid diagrams.
+
+### Fixed
+
+- **Switching AI accounts only affects that workspace.** It used to change the account for every window and every running Lathe instance.
+- **Add Account not adding the account.** The browser said you were signed in, but Lathe kept the old account.
+- **Commits credited to the wrong GitHub user.** Workspaces tied to a collab account wrote a GitHub noreply email built from your Zed id, not your GitHub id. Lathe now looks up the real id, and uses your git config until it has it.
+- **Sign Out quietly switching you to your other account.**
+- Running Beta and Stable side by side could swap account names and avatars between them, or flip windows between accounts.
+- **Stock Zed's "Failed to load the database file" error.** On first launch Lathe repairs Zed's copy after backing it up next to the original (`db.sqlite.before-lathe-repair`). Restart Zed afterward and your recent projects are back.
+- Lathe and Zed kept deleting each other's language server and debug adapter downloads. On Linux, Lathe wouldn't start while Zed was running, and the `lathe` command opened files in Zed.
+- **Picking reviewers:** clicking a person ticks them instead of sending the request right away. A footer has **Clear** and **Request** buttons.
+- Cmd-clicking a commit in the git graph no longer drops the commit you'd already selected.
+- Connecting GitHub for pull requests: clicking outside the dialog after approving in the browser threw the sign-in away.
+- Adding a Codex or API-key AI account didn't take effect until you restarted the agent.
+- "My reviews" keeps pull requests you've already approved or requested changes on.
+- Autosave and agent edits don't remove imports anymore. Saving with `cmd-s` works as before.
+- Cmd-+ and Cmd-- zoom the agent panel again, and in the markdown preview they zoom the whole window, not just the preview.
+- Agent file links like `main.rs:2` open from the first folder of a multi-folder project. Project folders keep the order you added them in.
+- Rainbow parameter colors, compact terminal cards, and **Save Workspace** / **Save Workspace As…** in the File menu are back after upstream merges dropped them.
+- Stop Metro and Stop Spotlight in the Mobile panel close the terminal and stop the process.
+- Git fixes: searching by a full SHA-256 hash, branch badges lining up with the wrong commits in filter mode, slow commit diffs in shallow clones, revisions and file paths with the same name, remote URLs in partial clones, and creating a worktree from a bare repository.
+- Folders symlinked from outside the project pick up file changes, and filesystems that need a polling watcher get one.
+- Emoji, symbol and non-Latin fonts rendering as empty boxes.
+- Crashes when pasting multiple selections at the end of a file, typing a partial key chord at end of file, and editing while an inlay hint request was in flight.
+- Cmd-click doing nothing on a symbol named the same as its file. Auto-closing brackets getting inserted inside comments and strings. `.env` files highlighted as shell scripts.
+- Prompts to external agents could be slow to send or not send at all. Remote project search could hang.
+- Windows builds called themselves "Zed" in file properties.
+- A batch of Markdown Preview fixes: images in tables and HTML blocks, task list checkboxes, nested code block copying, and search highlights covering the text.
+
+### Changed
+
+- **Update checks go through Lathe's own server** at `updates.lathe-ide.com` instead of straight to GitHub, so I can finally count how many installs are actually in use. Each check sends your Lathe version, channel, OS and architecture, plus a salted hash of your anonymous install ID. The raw ID never leaves your machine, and IP addresses aren't stored. Turn off `telemetry.metrics` and the hash isn't sent. Downloads still come straight from GitHub, and if Lathe's server is down, the check falls back to GitHub. Details are in the [telemetry docs](https://github.com/paterschris/lathe/blob/main/docs/src/telemetry.md#lathe-update-checks).
+- Merged upstream Zed (225 commits): faster startup, a smaller binary, and better multi-cursor and project search performance.
+- Project search runs as you type now, matching upstream. Set `"search_on_type": false` to go back to pressing Enter.
+- Title bar menus open on click, not on hover. Set `title_bar.open_menus_on_hover` to get the old behavior back.
+- A round of performance work on things that ran on every frame or keystroke: account menus, the git panel, git graph and outline, Mobile Dev's device polling, and the terminal's awaiting-input pulse. Long agent threads also open faster.
+- Removed a few leftovers from upstream that showed up in settings or keymaps but did nothing.
+
+### Linux
+
+- Lathe's data lives in `~/.local/share/lathe-data`, not `~/.local/share/lathe`, which is where the installer puts Lathe Stable and wipes on every update. The move happens on first launch.
+- `uninstall.sh` was removing Zed's folders instead of Lathe's.
+
+### Known issues
+
+- After this release, changes in Lathe and Zed don't show up in each other. That's the point, but worth knowing if you use both.
+- AI accounts you added before 1.11 still keep their files in Zed's folder. They work fine there; new ones go in Lathe's.
+- Dragging a commit onto a branch only works for the branch you have checked out.
+- Panels can't go in the editor area as tabs yet.
+- Tested by hand on macOS. The Windows credential copy and the AppImage haven't been tried on real machines, and Windows and Linux are otherwise untested.
+- Windows installers are signed, but SmartScreen still shows a reputation prompt. Choose **More info**, then **Run anyway**.
+
+---
+
 ## v1.11.2-beta - 2026-10-13
 
 Mostly fixes. 1.11.1 never went out, so its two fixes are in here too. If you also have Lathe Stable installed, read the first one.
