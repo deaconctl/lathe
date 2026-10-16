@@ -73,3 +73,35 @@ Administrators on Zed Business can enforce a no-sharing policy org-wide; members
 ## Concerns and Questions
 
 If you have concerns about telemetry, you can [open an issue](https://github.com/zed-industries/zed/issues/new/choose) or email hi@zed.dev.
+
+## Lathe Update Checks {#lathe-update-checks}
+
+Lathe release builds check for updates through a Cloudflare Worker. Each check
+includes your Lathe version, release channel, operating system, and processor
+architecture. When usage metrics are enabled and an installation ID is available,
+it also includes a SHA-256 hash of that ID with a fixed Lathe-specific salt. The
+raw installation ID is never sent by the update check. The hash stays the same
+across checks so daily and weekly active installs can be counted.
+
+The Worker records the hash, version, channel, operating system, architecture,
+and country reported by Cloudflare. It does not store or log your IP address.
+Cloudflare processes your IP address to serve the request and determine country.
+Update activity measures installations that check for updates, rather than people
+or time spent editing. Local builds using the default GitHub endpoint send no
+Lathe telemetry headers.
+
+To stop sending the install hash, open the Settings Editor, search for
+"telemetry", and turn off metrics. Or add this to your settings.json:
+
+```json [settings]
+{
+  "telemetry": {
+    "metrics": false
+  }
+}
+```
+
+Update checks continue with version, channel, operating system, and architecture,
+but the Worker records no usage point without an install hash. Asset downloads
+continue directly from GitHub. These update pings are separate from the inherited
+Zed telemetry described above.

@@ -82,7 +82,7 @@ jobs:
           # endpoint. The list endpoint includes prereleases (the `/latest`
           # endpoint excludes them), and the auto-updater filters the result
           # by the running binary's channel via tag suffix.
-          LATHE_UPDATE_URL: https://api.github.com/repos/paterschris/lathe/releases?per_page=30
+          LATHE_UPDATE_URL: https://updates.lathe-ide.com/releases
           ZED_COMMIT_SHA: ${{ github.sha }}
         run: script/build-fork
 
@@ -346,7 +346,7 @@ jobs:
 
       - name: Build
         env:
-          LATHE_UPDATE_URL: https://api.github.com/repos/paterschris/lathe/releases?per_page=30
+          LATHE_UPDATE_URL: https://updates.lathe-ide.com/releases
           ZED_COMMIT_SHA: ${{ github.sha }}
         run: script/build-fork-linux
 
@@ -455,7 +455,7 @@ jobs:
       - name: Build
         shell: pwsh
         env:
-          LATHE_UPDATE_URL: https://api.github.com/repos/paterschris/lathe/releases?per_page=30
+          LATHE_UPDATE_URL: https://updates.lathe-ide.com/releases
           ZED_COMMIT_SHA: ${{ github.sha }}
           ARCH: ${{ matrix.arch }}
         run: ./script/build-fork-windows.ps1 -Architecture $env:ARCH

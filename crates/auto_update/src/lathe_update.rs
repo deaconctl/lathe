@@ -1,10 +1,13 @@
 use crate::ReleaseAsset;
 use anyhow::{Context as _, Result};
-use http_client::{HttpClient, HttpClientWithUrl};
+use http_client::{
+    HttpClient, HttpClientWithUrl, HttpRequestExt, RedirectPolicy, Request, Url, http::HeaderMap,
+};
 use release_channel::ReleaseChannel;
 use serde::Deserialize;
+use sha2::{Digest, Sha256};
 use smol::io::AsyncReadExt;
-use std::{env, sync::Arc};
+use std::{env, sync::Arc, time::Duration};
 
 /// GitHub API URL for Lathe releases, resolved per channel.
 ///
@@ -126,7 +129,7 @@ pub async fn get_release_notes(
     channel: ReleaseChannel,
     version: &str,
 ) -> Result<ReleaseNotes> {
-    let releases = get_releases(http_client, api_url).await?;
+    let releases = get_releases(http_client, api_url, None).await?;
     let suffix = channel_tag_suffix(channel).unwrap_or_default();
     let version = version.trim_start_matches('v');
     let tag = format!("v{version}{suffix}");
@@ -157,13 +160,81 @@ pub async fn get_release_notes(
     })
 }
 
+pub struct UpdatePing {
+    pub installation_id: Option<Arc<str>>,
+    pub metrics_enabled: bool,
+    pub version: String,
+    pub channel: ReleaseChannel,
+    pub os: String,
+    pub arch: String,
+}
+
+fn update_headers(api_url: &str, ping: Option<&UpdatePing>) -> Result<HeaderMap> {
+    let mut headers = HeaderMap::new();
+    if Url::parse(api_url)?.host_str() == Some("api.github.com") {
+        return Ok(headers);
+    }
+    let Some(ping) = ping else {
+        return Ok(headers);
+    };
+    for (name, value) in [
+        ("x-lathe-version", ping.version.as_str()),
+        ("x-lathe-channel", ping.channel.dev_name()),
+        ("x-lathe-os", ping.os.as_str()),
+        ("x-lathe-arch", ping.arch.as_str()),
+    ] {
+        headers.insert(name, value.parse()?);
+    }
+    if ping.metrics_enabled {
+        if let Some(installation_id) = ping.installation_id.as_deref().filter(|id| !id.is_empty()) {
+            let mut digest = Sha256::new();
+            digest.update(b"lathe-update-ping-v1");
+            digest.update(installation_id.as_bytes());
+            headers.insert(
+                "x-lathe-install",
+                format!("{:x}", digest.finalize()).parse()?,
+            );
+        }
+    }
+    Ok(headers)
+}
+
 async fn get_releases(
     http_client: Arc<HttpClientWithUrl>,
     api_url: &str,
+    ping: Option<&UpdatePing>,
 ) -> Result<Vec<GitHubRelease>> {
-    let mut response = http_client.get(api_url, Default::default(), true).await?;
+    let headers = update_headers(api_url, ping)?;
+    // Do not forward the anonymous install header through redirects to other hosts.
+    let mut request = Request::builder()
+        .uri(api_url)
+        .follow_redirects(RedirectPolicy::NoFollow)
+        .timeout(Duration::from_secs(15))
+        .body(Default::default())?;
+    *request.headers_mut() = headers;
+    let response = http_client.send(request).await;
+    let should_fallback = api_url != LATHE_DEFAULT_UPDATE_URL
+        && response
+            .as_ref()
+            .map_or(true, |response| response.status().is_server_error());
+    let mut response = if should_fallback {
+        http_client
+            .get(LATHE_DEFAULT_UPDATE_URL, Default::default(), true)
+            .await?
+    } else {
+        response?
+    };
     let mut body = Vec::new();
-    response.body_mut().read_to_end(&mut body).await?;
+    if let Err(error) = response.body_mut().read_to_end(&mut body).await {
+        if api_url == LATHE_DEFAULT_UPDATE_URL || should_fallback {
+            return Err(error.into());
+        }
+        response = http_client
+            .get(LATHE_DEFAULT_UPDATE_URL, Default::default(), true)
+            .await?;
+        body.clear();
+        response.body_mut().read_to_end(&mut body).await?;
+    }
 
     anyhow::ensure!(
         response.status().is_success(),
@@ -195,8 +266,9 @@ pub async fn get_release_asset(
     os: &str,
     arch: &str,
     prefer_appimage: bool,
+    ping: &UpdatePing,
 ) -> Result<ReleaseAsset> {
-    let releases = get_releases(http_client, api_url).await?;
+    let releases = get_releases(http_client, api_url, Some(ping)).await?;
     let release = releases
         .into_iter()
         .find(|release| release_matches_channel(release, channel))
@@ -250,4 +322,136 @@ pub async fn get_release_asset(
         version,
         url: asset.browser_download_url,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ping() -> UpdatePing {
+        UpdatePing {
+            installation_id: Some(Arc::from("test-install")),
+            metrics_enabled: true,
+            version: "0.236.0".into(),
+            channel: ReleaseChannel::Stable,
+            os: "macos".into(),
+            arch: "aarch64".into(),
+        }
+    }
+
+    #[test]
+    fn opted_in_headers() -> Result<()> {
+        let headers = update_headers("https://updates.example/releases", Some(&ping()))?;
+        assert_eq!(headers["x-lathe-version"], "0.236.0");
+        assert_eq!(headers["x-lathe-channel"], "stable");
+        assert_eq!(headers["x-lathe-os"], "macos");
+        assert_eq!(headers["x-lathe-arch"], "aarch64");
+        let expected = format!("{:x}", Sha256::digest(b"lathe-update-ping-v1test-install"));
+        assert_eq!(headers["x-lathe-install"], expected);
+        assert_eq!(headers["x-lathe-install"].as_bytes().len(), 64);
+        Ok(())
+    }
+
+    #[test]
+    fn opted_out_headers() -> Result<()> {
+        let mut ping = ping();
+        ping.metrics_enabled = false;
+        let headers = update_headers("https://updates.example/releases", Some(&ping))?;
+        assert!(!headers.contains_key("x-lathe-install"));
+        assert_eq!(headers.len(), 4);
+        Ok(())
+    }
+
+    #[test]
+    fn missing_installation_id_headers() -> Result<()> {
+        let mut ping = ping();
+        ping.installation_id = None;
+        let headers = update_headers("https://updates.example/releases", Some(&ping))?;
+        assert!(!headers.contains_key("x-lathe-install"));
+        assert_eq!(headers.len(), 4);
+        Ok(())
+    }
+
+    #[test]
+    fn github_has_no_custom_headers() -> Result<()> {
+        for url in [LATHE_DEFAULT_UPDATE_URL, "https://API.GITHUB.COM/releases"] {
+            assert!(update_headers(url, Some(&ping()))?.is_empty());
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn proxy_failure_retries_github_without_headers() -> Result<()> {
+        use http_client::{FakeHttpClient, Response};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        for status in [None, Some(500), Some(503)] {
+            let requests = Arc::new(AtomicUsize::new(0));
+            let client = FakeHttpClient::create({
+                let requests = requests.clone();
+                move |request| {
+                    let number = requests.fetch_add(1, Ordering::SeqCst);
+                    async move {
+                        if number == 0 {
+                            assert_eq!(request.uri().host(), Some("updates.example"));
+                            assert_eq!(
+                                request.extensions().get::<RedirectPolicy>(),
+                                Some(&RedirectPolicy::NoFollow)
+                            );
+                            assert!(request.headers().contains_key("x-lathe-install"));
+                            if let Some(status) = status {
+                                Ok(Response::builder()
+                                    .status(status)
+                                    .body(Default::default())?)
+                            } else {
+                                anyhow::bail!("offline")
+                            }
+                        } else {
+                            assert_eq!(number, 1);
+                            assert_eq!(request.uri().to_string(), LATHE_DEFAULT_UPDATE_URL);
+                            assert!(
+                                !request
+                                    .headers()
+                                    .keys()
+                                    .any(|name| name.as_str().starts_with("x-lathe-"))
+                            );
+                            Ok(Response::builder().status(200).body("[]".into())?)
+                        }
+                    }
+                }
+            });
+            let releases = smol::block_on(get_releases(
+                client,
+                "https://updates.example/releases",
+                Some(&ping()),
+            ))?;
+            assert!(releases.is_empty());
+            assert_eq!(requests.load(Ordering::SeqCst), 2);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn proxy_client_error_does_not_retry() {
+        use http_client::{FakeHttpClient, Response};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let requests = Arc::new(AtomicUsize::new(0));
+        let client = FakeHttpClient::create({
+            let requests = requests.clone();
+            move |_| {
+                requests.fetch_add(1, Ordering::SeqCst);
+                async { Ok(Response::builder().status(403).body(Default::default())?) }
+            }
+        });
+        assert!(
+            smol::block_on(get_releases(
+                client,
+                "https://updates.example/releases",
+                Some(&ping()),
+            ))
+            .is_err()
+        );
+        assert_eq!(requests.load(Ordering::SeqCst), 1);
+    }
 }
