@@ -6374,12 +6374,17 @@ impl EditorElement {
                                 cx.theme().colors().scrollbar_thumb_background
                             }
                         };
+                        // The hitbox keeps the full track width so markers and
+                        // dragging are unaffected; only the painted thumb is thin.
+                        let painted_thumb_bounds =
+                            ScrollbarLayout::painted_thumb_bounds(thumb_bounds, axis);
                         window.paint_quad(quad(
-                            thumb_bounds,
-                            Corners::default(),
+                            painted_thumb_bounds,
+                            Corners::all(Pixels::MAX)
+                                .clamp_radii_for_quad_size(painted_thumb_bounds.size),
                             scrollbar_thumb_color,
-                            scrollbar_edges,
-                            cx.theme().colors().scrollbar_thumb_border,
+                            Edges::default(),
+                            transparent_black(),
                             BorderStyle::Solid,
                         ));
 
@@ -10626,6 +10631,7 @@ impl ScrollbarLayout {
     const LINE_MARKER_HEIGHT: Pixels = px(2.0);
     const MIN_MARKER_HEIGHT: Pixels = px(5.0);
     const MIN_THUMB_SIZE: Pixels = px(25.0);
+    const PAINTED_THUMB_THICKNESS: Pixels = px(6.0);
 
     fn new(
         scrollbar_track_hitbox: Hitbox,
@@ -10774,6 +10780,26 @@ impl ScrollbarLayout {
         Bounds::new(
             thumb_origin,
             scrollbar_track.size.apply_along(axis, |_| thumb_size),
+        )
+    }
+
+    fn painted_thumb_bounds(thumb_bounds: Bounds<Pixels>, axis: ScrollbarAxis) -> Bounds<Pixels> {
+        let cross_axis = axis.invert();
+        let leading_inset = match axis {
+            ScrollbarAxis::Horizontal => Pixels::ZERO,
+            ScrollbarAxis::Vertical => Self::BORDER_WIDTH,
+        };
+        let available_thickness =
+            (thumb_bounds.size.along(cross_axis) - leading_inset).max(Pixels::ZERO);
+        let thickness = Self::PAINTED_THUMB_THICKNESS.min(available_thickness);
+        let cross_origin = thumb_bounds.origin.along(cross_axis)
+            + leading_inset
+            + (available_thickness - thickness) / 2.;
+        Bounds::new(
+            thumb_bounds
+                .origin
+                .apply_along(cross_axis, |_| cross_origin),
+            thumb_bounds.size.apply_along(cross_axis, |_| thickness),
         )
     }
 
