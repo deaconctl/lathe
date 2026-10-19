@@ -100,19 +100,19 @@ impl UpdateButton {
     }
 
     pub fn checking() -> Self {
-        Self::new(IconName::LoadCircle, "Checking for Lathe updates…")
+        Self::new(IconName::LoadCircle, "Checking for Omega updates…")
             .icon_animate(true)
             .disabled(true)
     }
 
     pub fn downloading(progress: Option<f32>) -> Self {
-        Self::new(IconName::Download, "Downloading Lathe update…")
+        Self::new(IconName::Download, "Downloading Omega update…")
             .progress(progress)
             .disabled(true)
     }
 
     pub fn installing(version: impl Into<SharedString>) -> Self {
-        Self::new(IconName::LoadCircle, "Installing Lathe update…")
+        Self::new(IconName::LoadCircle, "Installing Omega update…")
             .icon_animate(true)
             .tooltip(version)
             .disabled(true)
@@ -129,7 +129,7 @@ impl UpdateButton {
     }
 
     pub fn errored(error: impl Into<SharedString>) -> Self {
-        Self::new(IconName::Warning, "Failed to update Lathe")
+        Self::new(IconName::Warning, "Failed to update Omega")
             .icon_color(Color::Warning)
             .tooltip(error)
             .with_dismiss()
@@ -231,7 +231,7 @@ impl Component for UpdateButton {
     }
 
     fn description() -> &'static str {
-        "A button component displayed in the title bar to show auto-update status and allow users to restart Lathe."
+        "A button component displayed in the title bar to show auto-update status and allow users to restart Omega."
     }
 
     fn preview(_window: &mut Window, _cx: &mut App) -> AnyElement {

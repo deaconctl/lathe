@@ -47,11 +47,11 @@ fn address() -> SocketAddr {
 
 fn instance_handshake() -> &'static str {
     match *release_channel::RELEASE_CHANNEL {
-        ReleaseChannel::Dev => "Lathe Editor Dev Instance Running",
-        ReleaseChannel::Nightly => "Lathe Editor Nightly Instance Running",
-        ReleaseChannel::Preview => "Lathe Editor Preview Instance Running",
-        ReleaseChannel::Beta => "Lathe Editor Beta Instance Running",
-        ReleaseChannel::Stable => "Lathe Editor Stable Instance Running",
+        ReleaseChannel::Dev => "Omega Editor Dev Instance Running",
+        ReleaseChannel::Nightly => "Omega Editor Nightly Instance Running",
+        ReleaseChannel::Preview => "Omega Editor Preview Instance Running",
+        ReleaseChannel::Beta => "Omega Editor Beta Instance Running",
+        ReleaseChannel::Stable => "Omega Editor Stable Instance Running",
     }
 }
 

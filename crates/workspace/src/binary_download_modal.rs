@@ -136,9 +136,9 @@ impl Render for BinaryDownloadModal {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let count = self.items.len();
         let header_label: SharedString = if count == 1 {
-            "Lathe wants to download and run 1 item".into()
+            "Omega wants to download and run 1 item".into()
         } else {
-            format!("Lathe wants to download and run {count} items").into()
+            format!("Omega wants to download and run {count} items").into()
         };
 
         let approved_count = self

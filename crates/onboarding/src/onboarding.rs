@@ -352,7 +352,7 @@ impl Render for Onboarding {
                                             .child(
                                                 v_flex()
                                                     .child(
-                                                        Headline::new("Welcome to Lathe")
+                                                        Headline::new("Welcome to Omega")
                                                             .size(HeadlineSize::Small),
                                                     )
                                                     .child(

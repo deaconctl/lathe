@@ -15,29 +15,29 @@ fi
 # Resolve names by channel
 case "$channel" in
     stable)
-        app_name="Lathe"
-        app_id="dev.lathe.lathe"
+        app_name="Omega"
+        app_id="dev.omega.omega"
         ;;
     preview)
-        app_name="Lathe Preview"
-        app_id="dev.lathe.lathe-Preview"
+        app_name="Omega Preview"
+        app_id="dev.omega.omega-Preview"
         ;;
     beta)
-        app_name="Lathe Beta"
-        app_id="dev.lathe.lathe-Beta"
+        app_name="Omega Beta"
+        app_id="dev.omega.omega-Beta"
         ;;
     nightly)
-        app_name="Lathe Nightly"
-        app_id="dev.lathe.lathe-Nightly"
+        app_name="Omega Nightly"
+        app_id="dev.omega.omega-Nightly"
         ;;
     *)
-        app_name="Lathe Dev"
-        app_id="dev.lathe.lathe-Dev"
+        app_name="Omega Dev"
+        app_id="dev.omega.omega-Dev"
         ;;
 esac
 
 # Find the tarball from package-fork-linux output
-tarball=$(ls "${target_dir}/release"/Lathe-*-linux.tar.gz 2>/dev/null | head -1)
+tarball=$(ls "${target_dir}/release"/Omega-*-linux.tar.gz 2>/dev/null | head -1)
 
 if [ -z "$tarball" ]; then
     echo "Error: Linux tarball not found in ${target_dir}/release/"
@@ -45,7 +45,7 @@ if [ -z "$tarball" ]; then
     exit 1
 fi
 
-install_dir="${HOME}/.local/share/lathe${suffix}"
+install_dir="${HOME}/.local/share/omega${suffix}"
 bin_dir="${HOME}/.local/bin"
 desktop_dir="${HOME}/.local/share/applications"
 icon_dir_512="${HOME}/.local/share/icons/hicolor/512x512/apps"
@@ -69,17 +69,17 @@ tar -xzf "$tarball" -C "$temp_dir"
 
 # Move app directory into place
 mkdir -p "$install_dir"
-mv "$temp_dir/lathe${suffix}.app"/* "$install_dir/"
+mv "$temp_dir/omega${suffix}.app"/* "$install_dir/"
 
 # Symlink CLI to ~/.local/bin
 mkdir -p "$bin_dir"
-ln -sf "${install_dir}/bin/lathe" "${bin_dir}/lathe"
+ln -sf "${install_dir}/bin/omega" "${bin_dir}/omega"
 
 # Install .desktop file system-wide for the user
 mkdir -p "$desktop_dir"
 if [ -f "${install_dir}/share/applications/${app_id}.desktop" ]; then
     # Update paths in .desktop to point to the installed location
-    sed "s|Exec=lathe|Exec=${install_dir}/bin/lathe|g" \
+    sed "s|Exec=omega|Exec=${install_dir}/bin/omega|g" \
         "${install_dir}/share/applications/${app_id}.desktop" \
         > "${desktop_dir}/${app_id}.desktop"
     chmod +x "${desktop_dir}/${app_id}.desktop"
@@ -87,11 +87,11 @@ fi
 
 # Install icons
 mkdir -p "$icon_dir_512" "$icon_dir_1024"
-if [ -f "${install_dir}/share/icons/hicolor/512x512/apps/lathe.png" ]; then
-    cp "${install_dir}/share/icons/hicolor/512x512/apps/lathe.png" "${icon_dir_512}/lathe.png"
+if [ -f "${install_dir}/share/icons/hicolor/512x512/apps/omega.png" ]; then
+    cp "${install_dir}/share/icons/hicolor/512x512/apps/omega.png" "${icon_dir_512}/omega.png"
 fi
-if [ -f "${install_dir}/share/icons/hicolor/1024x1024/apps/lathe.png" ]; then
-    cp "${install_dir}/share/icons/hicolor/1024x1024/apps/lathe.png" "${icon_dir_1024}/lathe.png"
+if [ -f "${install_dir}/share/icons/hicolor/1024x1024/apps/omega.png" ]; then
+    cp "${install_dir}/share/icons/hicolor/1024x1024/apps/omega.png" "${icon_dir_1024}/omega.png"
 fi
 
 # Update desktop database if available
@@ -107,7 +107,7 @@ fi
 echo ""
 echo "=== Installed ==="
 echo "  App:     ${install_dir}"
-echo "  CLI:     ${bin_dir}/lathe"
+echo "  CLI:     ${bin_dir}/omega"
 echo "  Desktop: ${desktop_dir}/${app_id}.desktop"
 echo ""
 
@@ -120,6 +120,6 @@ if ! echo "$PATH" | tr ':' '\n' | grep -q "^${bin_dir}$"; then
 fi
 
 echo "Launch from your application menu or run:"
-echo "  lathe"
+echo "  omega"
 echo ""
 echo "Note: This fork installs as '${app_name}' and runs alongside stock Zed."

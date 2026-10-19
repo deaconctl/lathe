@@ -910,7 +910,7 @@ mod linux {
                 // ./zed is for the target directory in development builds. Lathe bundles
                 // rename the editor binary, so its libexec name is probed first.
                 let possible_locations = [
-                    "../libexec/lathe-editor",
+                    "../libexec/omega-editor",
                     "../libexec/zed-editor",
                     "../lib/zed/zed-editor",
                     "./zed",
@@ -1305,7 +1305,7 @@ mod windows {
                 // directory in development builds. Lathe bundles rename the editor binary
                 // and keep the Linux-style libexec split, so those names are probed first.
                 let possible_locations = [
-                    "../libexec/lathe-editor.exe",
+                    "../libexec/omega-editor.exe",
                     "../Zed.exe",
                     "../lib/zed/zed-editor.exe",
                     "./zed.exe",

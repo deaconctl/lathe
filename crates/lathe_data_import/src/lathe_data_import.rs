@@ -26,7 +26,7 @@ pub const EXPECTED_CARGO_BIN_NAME: &str = "zed";
 
 /// Checked against `paths::APP_NAME` at compile time, so an upstream merge that
 /// resets it to "Zed" fails the build instead of pointing Lathe at Zed's data.
-pub const EXPECTED_APP_NAME: &str = "Lathe";
+pub const EXPECTED_APP_NAME: &str = "Omega";
 
 const LEGACY_APP_NAME: &str = "Zed";
 const LEGACY_APP_NAME_LOWERCASE: &str = "zed";
@@ -140,6 +140,12 @@ pub fn import_from_zed(release_channel: &str, has_custom_data_dir: bool) {
         return;
     };
     let mut report = ImportReport::default();
+    if let Err(error) = migrate_from_lathe(&roots, &mut report) {
+        // Importing Zed's data now would leave it in place of the user's Lathe data.
+        report.warn(format!("copying data from Lathe failed: {error:#}"));
+        *REPORT.lock() = Some(report);
+        return;
+    }
     if cfg!(any(target_os = "linux", target_os = "freebsd"))
         && let Err(error) = relocate_linux_data(&roots, &mut report)
     {
@@ -190,6 +196,123 @@ fn legacy_sibling(directory: &Path) -> Option<PathBuf> {
         return None;
     }
     Some(directory.with_file_name(legacy_name))
+}
+
+/// The fork was called Lathe before it became Omega. Lathe's folders are copied
+/// once, not moved, so an installed Lathe keeps working.
+const PREVIOUS_APP_NAME: &str = "Lathe";
+const PREVIOUS_APP_NAME_LOWERCASE: &str = "lathe";
+const PREVIOUS_LINUX_DATA_DIR_NAME: &str = "lathe-data";
+const LATHE_MARKER_FILE_NAME: &str = ".migrated_from_lathe";
+
+fn lathe_sibling(directory: &Path) -> Option<PathBuf> {
+    let name = directory.file_name()?.to_str()?;
+    let previous_name = if name == paths::APP_NAME {
+        PREVIOUS_APP_NAME
+    } else if name == paths::LINUX_DATA_DIR_NAME {
+        PREVIOUS_LINUX_DATA_DIR_NAME
+    } else if name == paths::APP_NAME_LOWERCASE {
+        PREVIOUS_APP_NAME_LOWERCASE
+    } else {
+        return None;
+    };
+    Some(directory.with_file_name(previous_name))
+}
+
+/// Copies Lathe's config and data into Omega's folders. Entries already in
+/// Omega's folders are kept, so an interrupted copy resumes on the next launch;
+/// the marker is written last. Lathe's Zed import marker comes along with its
+/// data, which keeps the Zed import from running again.
+fn migrate_from_lathe(roots: &Roots, report: &mut ImportReport) -> Result<()> {
+    let (Some(previous_config), Some(previous_data)) =
+        (lathe_sibling(&roots.config), lathe_sibling(&roots.data))
+    else {
+        return Ok(());
+    };
+    let marker_path = roots.data.join(LATHE_MARKER_FILE_NAME);
+    if marker_path.exists() || (!previous_config.exists() && !previous_data.exists()) {
+        return Ok(());
+    }
+    fs::create_dir_all(&roots.data)
+        .with_context(|| format!("creating {}", roots.data.display()))?;
+    let Some(_lock) = ImportLock::acquire(&roots.data.join(LOCK_FILE_NAME))? else {
+        report.info("another instance is copying data from Lathe; skipping");
+        return Ok(());
+    };
+    if marker_path.exists() {
+        return Ok(());
+    }
+
+    copy_missing_entries(&previous_config, &roots.config, Path::new(""), report)?;
+    copy_missing_entries(&previous_data, &roots.data, Path::new(""), report)?;
+    rewrite_ai_account_dirs(
+        &roots.config.join("ai_accounts.json"),
+        &previous_data,
+        &roots.data,
+    )?;
+    write_atomically(&marker_path, b"")?;
+    report.info(format!(
+        "copied data from {} and {}",
+        previous_config.display(),
+        previous_data.display()
+    ));
+    Ok(())
+}
+
+/// `relative` is the path of `source` inside the data folder, for matching
+/// [`CLONE_ONLY_ENTRIES`].
+fn copy_missing_entries(
+    source: &Path,
+    destination: &Path,
+    relative: &Path,
+    report: &mut ImportReport,
+) -> Result<()> {
+    let entries = match fs::read_dir(source) {
+        Ok(entries) => entries,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => {
+            return Err(anyhow!(error).context(format!("reading {}", source.display())));
+        }
+    };
+    for entry in entries {
+        let entry = entry?;
+        let name = entry.file_name();
+        let file_type = entry.file_type()?;
+        // Sockets and other special files belong to a running Lathe.
+        let is_regular = file_type.is_dir() || file_type.is_file() || file_type.is_symlink();
+        if !is_regular || name == LOCK_FILE_NAME {
+            continue;
+        }
+        let entry_relative = relative.join(&name);
+        let contains_clone_only_entry = CLONE_ONLY_ENTRIES.iter().any(|clone_only| {
+            let clone_only = Path::new(clone_only);
+            clone_only != entry_relative && clone_only.starts_with(&entry_relative)
+        });
+        if contains_clone_only_entry && file_type.is_dir() {
+            copy_missing_entries(
+                &entry.path(),
+                &destination.join(&name),
+                &entry_relative,
+                report,
+            )?;
+            continue;
+        }
+        let mode = if CLONE_ONLY_ENTRIES
+            .iter()
+            .any(|clone_only| Path::new(clone_only) == entry_relative)
+        {
+            CopyMode::OnlyIfFree
+        } else {
+            CopyMode::Always
+        };
+        if copy_entry(&entry.path(), &destination.join(&name), mode)? == Copied::SkippedNotFree {
+            report.info(format!(
+                "not copying {}; it is downloaded again when needed",
+                entry.path().display()
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// What script/package-fork-linux puts in an installation. Everything else in
@@ -1543,6 +1666,41 @@ mod tests {
             })
             .expect("query");
         count
+    }
+
+    #[test]
+    fn migrates_lathe_folders_once_without_overwriting() {
+        let root = tempfile::tempdir().expect("temp dir");
+        let path = root.path();
+        let roots = Roots {
+            legacy_config: path.join("config/zed"),
+            legacy_data: path.join("data/Zed"),
+            config: path.join("config").join(paths::APP_NAME_LOWERCASE),
+            data: path.join("data").join(paths::LINUX_DATA_DIR_NAME),
+        };
+        let previous_config = path.join("config").join(PREVIOUS_APP_NAME_LOWERCASE);
+        let previous_data = path.join("data").join(PREVIOUS_LINUX_DATA_DIR_NAME);
+        write(&previous_config.join("settings.json"), "lathe settings");
+        write(&previous_config.join("keymap.json"), "lathe keymap");
+        write(&previous_data.join("db/state.db"), "db");
+        write(&previous_data.join("extensions/installed/x"), "extension");
+        write(&previous_data.join(LOCK_FILE_NAME), "");
+        write(&roots.config.join("keymap.json"), "omega keymap");
+
+        let mut report = ImportReport::default();
+        migrate_from_lathe(&roots, &mut report).expect("migrate");
+        let read = |path: PathBuf| fs::read_to_string(path).expect("read");
+        assert_eq!(read(roots.config.join("settings.json")), "lathe settings");
+        assert_eq!(read(roots.config.join("keymap.json")), "omega keymap");
+        assert_eq!(read(roots.data.join("db/state.db")), "db");
+        assert_eq!(read(roots.data.join("extensions/installed/x")), "extension");
+        assert!(roots.data.join(LATHE_MARKER_FILE_NAME).exists());
+        assert!(previous_config.join("settings.json").exists());
+
+        write(&previous_config.join("settings.json"), "changed in lathe");
+        fs::remove_file(roots.config.join("settings.json")).expect("remove");
+        migrate_from_lathe(&roots, &mut report).expect("migrate again");
+        assert!(!roots.config.join("settings.json").exists());
     }
 
     #[test]

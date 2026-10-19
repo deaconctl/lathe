@@ -673,9 +673,9 @@ mod macos {
             .filter(|character| !matches!(character, '"' | '\\'))
             .collect();
         let script = format!(
-            "display dialog \"Lathe hit an unexpected error and needs to quit.\n\n\
+            "display dialog \"Omega hit an unexpected error and needs to quit.\n\n\
              A crash report has been saved. Location: {sanitized_location}\" \
-             with title \"Lathe quit unexpectedly\" with icon stop \
+             with title \"Omega quit unexpectedly\" with icon stop \
              buttons {{\"OK\"}} default button \"OK\" giving up after 30"
         );
 

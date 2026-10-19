@@ -15,7 +15,7 @@ pub const EDITORCONFIG_NAME: &str = ".editorconfig";
 /// and state directory paths.
 ///
 /// Forks should change this to avoid colliding with Zed's user data.
-pub const APP_NAME: &str = "Lathe";
+pub const APP_NAME: &str = "Omega";
 
 /// Lowercased form of [`APP_NAME`], for use in XDG-style paths on
 /// Linux/FreeBSD and the macOS `~/.config` fallback.
@@ -235,7 +235,7 @@ pub fn config_dir() -> &'static PathBuf {
 /// `~/.local/share/lathe` (and `lathe-beta`, ...) is where
 /// script/install-fork-linux and auto-update put the app itself, and both
 /// clear that folder on every reinstall or update.
-pub const LINUX_DATA_DIR_NAME: &str = "lathe-data";
+pub const LINUX_DATA_DIR_NAME: &str = "omega-data";
 
 /// Returns the path to the data directory used by Zed.
 pub fn data_dir() -> &'static PathBuf {

@@ -42,11 +42,11 @@ pub static RELEASE_CHANNEL: LazyLock<ReleaseChannel> =
 #[cfg(target_os = "windows")]
 pub fn app_identifier() -> &'static str {
     match *RELEASE_CHANNEL {
-        ReleaseChannel::Dev => "Lathe-Editor-Dev",
-        ReleaseChannel::Nightly => "Lathe-Editor-Nightly",
-        ReleaseChannel::Preview => "Lathe-Editor-Preview",
-        ReleaseChannel::Beta => "Lathe-Editor-Beta",
-        ReleaseChannel::Stable => "Lathe-Editor-Stable",
+        ReleaseChannel::Dev => "Omega-Editor-Dev",
+        ReleaseChannel::Nightly => "Omega-Editor-Nightly",
+        ReleaseChannel::Preview => "Omega-Editor-Preview",
+        ReleaseChannel::Beta => "Omega-Editor-Beta",
+        ReleaseChannel::Stable => "Omega-Editor-Stable",
     }
 }
 
@@ -224,17 +224,18 @@ impl ReleaseChannel {
 
     /// Returns whether we want to poll for updates for this [`ReleaseChannel`]
     pub fn poll_for_updates(&self) -> bool {
-        !matches!(self, ReleaseChannel::Dev)
+        // Omega has no release feed yet, and the inherited feeds would install Lathe or Zed.
+        false
     }
 
     /// Returns the display name for this [`ReleaseChannel`].
     pub fn display_name(&self) -> &'static str {
         match self {
-            ReleaseChannel::Dev => "Lathe Dev",
-            ReleaseChannel::Nightly => "Lathe Nightly",
-            ReleaseChannel::Preview => "Lathe Preview",
-            ReleaseChannel::Beta => "Lathe Beta",
-            ReleaseChannel::Stable => "Lathe",
+            ReleaseChannel::Dev => "Omega Dev",
+            ReleaseChannel::Nightly => "Omega Nightly",
+            ReleaseChannel::Preview => "Omega Preview",
+            ReleaseChannel::Beta => "Omega Beta",
+            ReleaseChannel::Stable => "Omega",
         }
     }
 
@@ -254,11 +255,11 @@ impl ReleaseChannel {
     /// This also has to match the bundle identifier for Lathe on macOS.
     pub fn app_id(&self) -> &'static str {
         match self {
-            ReleaseChannel::Dev => "dev.lathe.lathe-Dev",
-            ReleaseChannel::Nightly => "dev.lathe.lathe-Nightly",
-            ReleaseChannel::Preview => "dev.lathe.lathe-Preview",
-            ReleaseChannel::Beta => "dev.lathe.lathe-Beta",
-            ReleaseChannel::Stable => "dev.lathe.lathe",
+            ReleaseChannel::Dev => "dev.omega.omega-Dev",
+            ReleaseChannel::Nightly => "dev.omega.omega-Nightly",
+            ReleaseChannel::Preview => "dev.omega.omega-Preview",
+            ReleaseChannel::Beta => "dev.omega.omega-Beta",
+            ReleaseChannel::Stable => "dev.omega.omega",
         }
     }
 

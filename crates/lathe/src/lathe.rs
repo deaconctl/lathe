@@ -74,7 +74,7 @@ fn report_data_import(cx: &mut App) {
 
     struct AccountsNeedSignIn;
     let message = format!(
-        "Sign in again to {}. Lathe now keeps its data separate from Zed, and this \
+        "Sign in again to {}. Omega now keeps its data separate from Zed, and this \
          sign-in couldn't be carried over.",
         report.accounts_needing_sign_in.join(", ")
     );

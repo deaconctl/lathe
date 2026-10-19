@@ -348,7 +348,7 @@ impl Github {
             repo = remote.repo,
         );
         let body = serde_json::to_vec(
-            &serde_json::json!({ "message": "Dismissed via Lathe", "event": "DISMISS" }),
+            &serde_json::json!({ "message": "Dismissed via Omega", "event": "DISMISS" }),
         )?;
         let request = github_request(
             GithubMethod::Put,
@@ -507,7 +507,7 @@ pub(super) fn github_request(
     };
     let mut builder = builder
         .header("Accept", accept)
-        .header("User-Agent", "Lathe")
+        .header("User-Agent", "Omega")
         .header("X-GitHub-Api-Version", "2022-11-28")
         .follow_redirects(http_client::RedirectPolicy::FollowAll);
     if let Some(value) = github_auth_header(auth) {

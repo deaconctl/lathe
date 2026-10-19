@@ -232,10 +232,10 @@ impl ConnectGitHostModal {
         let host = self.host.host();
         match self.host.kind() {
             GitHostAuthKind::GitHub => Some(format!(
-                "https://{host}/settings/tokens/new?scopes=repo,read:org&description=Lathe"
+                "https://{host}/settings/tokens/new?scopes=repo,read:org&description=Omega"
             )),
             GitHostAuthKind::GitLab => Some(format!(
-                "https://{host}/-/user_settings/personal_access_tokens?name=Lathe&scopes=api"
+                "https://{host}/-/user_settings/personal_access_tokens?name=Omega&scopes=api"
             )),
             GitHostAuthKind::Bitbucket => {
                 Some(format!("https://{host}/account/settings/app-passwords/new"))
@@ -417,7 +417,7 @@ impl ConnectGitHostModal {
                 v_flex()
                     .gap_2()
                     .child(Label::new(
-                        "In the browser window that opened, enter this code to authorize Lathe:",
+                        "In the browser window that opened, enter this code to authorize Omega:",
                     ))
                     .child(
                         h_flex()
@@ -456,7 +456,7 @@ impl ConnectGitHostModal {
         let product = self.host.kind().product_name();
         let blurb = if needs_username {
             format!(
-                "Paste a {product} app password or API token. Lathe stores it in your keychain."
+                "Paste a {product} app password or API token. Omega stores it in your keychain."
             )
         } else {
             format!(

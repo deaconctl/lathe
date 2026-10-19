@@ -291,8 +291,8 @@ repl = { workspace = true, features = ["test-support"] }
 
 [package.metadata.bundle-dev]
 icon = ["resources/app-icon-dev@2x.png", "resources/app-icon-dev.png"]
-identifier = "dev.lathe.lathe-Dev"
-name = "Lathe Dev"
+identifier = "dev.omega.omega-Dev"
+name = "Omega Dev"
 category = "Developer Tool"
 osx_minimum_system_version = "10.15.7"
 osx_info_plist_exts = ["resources/info/*"]
@@ -300,8 +300,8 @@ osx_url_schemes = ["lathe"]
 
 [package.metadata.bundle-nightly]
 icon = ["resources/app-icon-nightly@2x.png", "resources/app-icon-nightly.png"]
-identifier = "dev.lathe.lathe-Nightly"
-name = "Lathe Nightly"
+identifier = "dev.omega.omega-Nightly"
+name = "Omega Nightly"
 category = "Developer Tool"
 osx_minimum_system_version = "10.15.7"
 osx_info_plist_exts = ["resources/info/*"]
@@ -309,8 +309,8 @@ osx_url_schemes = ["lathe"]
 
 [package.metadata.bundle-preview]
 icon = ["resources/app-icon-preview@2x.png", "resources/app-icon-preview.png"]
-identifier = "dev.lathe.lathe-Preview"
-name = "Lathe Preview"
+identifier = "dev.omega.omega-Preview"
+name = "Omega Preview"
 category = "Developer Tool"
 osx_minimum_system_version = "10.15.7"
 osx_info_plist_exts = ["resources/info/*"]
@@ -318,8 +318,8 @@ osx_url_schemes = ["lathe"]
 
 [package.metadata.bundle-beta]
 icon = ["resources/app-icon-beta@2x.png", "resources/app-icon-beta.png"]
-identifier = "dev.lathe.lathe-Beta"
-name = "Lathe Beta"
+identifier = "dev.omega.omega-Beta"
+name = "Omega Beta"
 category = "Developer Tool"
 osx_minimum_system_version = "10.15.7"
 osx_info_plist_exts = ["resources/info/*"]
@@ -327,8 +327,8 @@ osx_url_schemes = ["lathe"]
 
 [package.metadata.bundle-stable]
 icon = ["resources/app-icon@2x.png", "resources/app-icon.png"]
-identifier = "dev.lathe.lathe"
-name = "Lathe"
+identifier = "dev.omega.omega"
+name = "Omega"
 category = "Developer Tool"
 osx_minimum_system_version = "10.15.7"
 osx_info_plist_exts = ["resources/info/*"]

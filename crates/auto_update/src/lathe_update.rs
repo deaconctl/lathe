@@ -22,8 +22,8 @@ use std::{env, sync::Arc, time::Duration};
 const LATHE_DEFAULT_UPDATE_URL: &str =
     "https://api.github.com/repos/paterschris/lathe/releases?per_page=30";
 
-pub const PACKAGE_MANAGER_INSTALL_TITLE: &str = "Lathe was installed via a package manager.";
-pub const UP_TO_DATE_TITLE: &str = "Lathe is up to date";
+pub const PACKAGE_MANAGER_INSTALL_TITLE: &str = "Omega was installed via a package manager.";
+pub const UP_TO_DATE_TITLE: &str = "Omega is up to date";
 pub const UP_TO_DATE_MESSAGE: &str = "You're already running the latest version.";
 
 pub fn update_base_url(channel: ReleaseChannel) -> Option<String> {

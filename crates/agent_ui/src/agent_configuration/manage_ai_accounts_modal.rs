@@ -152,7 +152,7 @@ impl ManageAiAccountsModal {
                 gpui::PromptLevel::Critical,
                 &format!("Remove AI account \"{display_name}\"?"),
                 Some(&format!(
-                    "{} was not created by Lathe and may still be in use outside it. \
+                    "{} was not created by Omega and may still be in use outside it. \
                      Removing the account leaves that directory untouched.",
                     config_dir.display()
                 )),
@@ -569,7 +569,7 @@ impl ManageAiAccountsModal {
                     )
                     .label_size(LabelSize::XSmall)
                     .tooltip(Tooltip::text(
-                        "Register profiles from ~/.claude-profiles/ as Lathe AI Accounts",
+                        "Register profiles from ~/.claude-profiles/ as Omega AI Accounts",
                     ))
                     .on_click(cx.listener(|this, _, _window, cx| {
                         this.import_claude_profiles(cx);

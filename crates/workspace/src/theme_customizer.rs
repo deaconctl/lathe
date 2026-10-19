@@ -225,7 +225,7 @@ impl ThemeCustomizer {
         // "Lathe" tab
         row = row.child(Self::category_pill(
             "cat-lathe",
-            "Lathe",
+            "Omega",
             self.show_lathe_only,
             true,
             cx,

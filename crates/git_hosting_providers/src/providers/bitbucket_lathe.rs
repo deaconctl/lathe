@@ -313,7 +313,7 @@ pub(super) fn bitbucket_request(
     };
     let mut builder = builder
         .header("Accept", "application/json")
-        .header("User-Agent", "Lathe")
+        .header("User-Agent", "Omega")
         .follow_redirects(http_client::RedirectPolicy::FollowAll);
     if let Some(value) = bitbucket_auth_header(auth) {
         builder = builder.header("Authorization", value);

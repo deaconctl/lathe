@@ -326,7 +326,7 @@ pub(crate) fn ensure_v2_wrapper(profile: &str, path: PathBuf) -> Result<()> {
         block.push('\n');
     }
     block.push_str(&format!(
-        "\n# Added by Lathe so AWS SDK v2 apps can use the '{profile}' login session.\n\
+        "\n# Added by Omega so AWS SDK v2 apps can use the '{profile}' login session.\n\
          # Safe to delete.\n\
          {header}\n\
          credential_process = aws configure export-credentials --profile {profile} --format process\n"

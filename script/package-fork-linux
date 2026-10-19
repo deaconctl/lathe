@@ -32,24 +32,24 @@ icon_suffix="$suffix"
 # Resolve app/desktop names by channel
 case "$channel" in
     stable)
-        app_name="Lathe"
-        app_id="dev.lathe.lathe"
+        app_name="Omega"
+        app_id="dev.omega.omega"
         ;;
     preview)
-        app_name="Lathe Preview"
-        app_id="dev.lathe.lathe-Preview"
+        app_name="Omega Preview"
+        app_id="dev.omega.omega-Preview"
         ;;
     beta)
-        app_name="Lathe Beta"
-        app_id="dev.lathe.lathe-Beta"
+        app_name="Omega Beta"
+        app_id="dev.omega.omega-Beta"
         ;;
     nightly)
-        app_name="Lathe Nightly"
-        app_id="dev.lathe.lathe-Nightly"
+        app_name="Omega Nightly"
+        app_id="dev.omega.omega-Nightly"
         ;;
     *)
-        app_name="Lathe Dev"
-        app_id="dev.lathe.lathe-Dev"
+        app_name="Omega Dev"
+        app_id="dev.omega.omega-Dev"
         ;;
 esac
 
@@ -86,12 +86,12 @@ $strip_cmd --strip-debug "$cli_binary"
 temp_dir=$(mktemp -d)
 trap 'rm -rf "$temp_dir"' EXIT
 
-app_dir="${temp_dir}/lathe${suffix}.app"
+app_dir="${temp_dir}/omega${suffix}.app"
 
 # Binary
 mkdir -p "${app_dir}/bin" "${app_dir}/libexec"
-cp "$zed_binary" "${app_dir}/libexec/lathe-editor"
-cp "$cli_binary" "${app_dir}/bin/lathe"
+cp "$zed_binary" "${app_dir}/libexec/omega-editor"
+cp "$cli_binary" "${app_dir}/bin/omega"
 
 # Bundle shared libraries
 echo "--- Bundling shared libraries ---"
@@ -112,15 +112,15 @@ ldd "$zed_binary" | \
 # Icons
 echo "--- Copying icons ---"
 mkdir -p "${app_dir}/share/icons/hicolor/512x512/apps"
-cp "crates/zed/resources/app-icon${icon_suffix}.png" "${app_dir}/share/icons/hicolor/512x512/apps/lathe.png"
+cp "crates/zed/resources/app-icon${icon_suffix}.png" "${app_dir}/share/icons/hicolor/512x512/apps/omega.png"
 mkdir -p "${app_dir}/share/icons/hicolor/1024x1024/apps"
-cp "crates/zed/resources/app-icon${icon_suffix}@2x.png" "${app_dir}/share/icons/hicolor/1024x1024/apps/lathe.png"
+cp "crates/zed/resources/app-icon${icon_suffix}@2x.png" "${app_dir}/share/icons/hicolor/1024x1024/apps/omega.png"
 
 # .desktop file
 echo "--- Creating .desktop entry ---"
 export DO_STARTUP_NOTIFY="true"
-export APP_CLI="lathe"
-export APP_ICON="lathe"
+export APP_CLI="omega"
+export APP_ICON="omega"
 export APP_ARGS="%U"
 export APP_NAME="$app_name"
 
@@ -138,21 +138,21 @@ if [ -f "assets/licenses.md" ]; then
 fi
 
 # Create archive
-archive_name="Lathe-${version}-${arch}-linux.tar.gz"
+archive_name="Omega-${version}-${arch}-linux.tar.gz"
 out_dir="${target_dir}/release"
 mkdir -p "$out_dir"
 
 echo "--- Creating archive ---"
-tar -czvf "${out_dir}/${archive_name}" -C "$temp_dir" "lathe${suffix}.app"
+tar -czvf "${out_dir}/${archive_name}" -C "$temp_dir" "omega${suffix}.app"
 
 # AppImage (optional): built when appimagetool is available, which CI
 # provides via APPIMAGETOOL. APPIMAGE_RUNTIME pins the runtime so the build
 # doesn't fetch whatever "continuous" runtime is current.
 appimagetool="${APPIMAGETOOL:-appimagetool}"
-appimage_name="Lathe-${version}-${arch}-linux.AppImage"
+appimage_name="Omega-${version}-${arch}-linux.AppImage"
 if command -v "$appimagetool" &>/dev/null; then
     echo "--- Creating AppImage ---"
-    appimage_dir="${temp_dir}/Lathe.AppDir"
+    appimage_dir="${temp_dir}/Omega.AppDir"
     cp -a "$app_dir" "$appimage_dir"
 
     # Go through the cli, not the editor binary: only the cli hands paths to
@@ -162,17 +162,17 @@ if command -v "$appimagetool" &>/dev/null; then
     cat > "${appimage_dir}/AppRun" <<'EOF'
 #!/bin/sh
 here="$(dirname "$(readlink -f "$0")")"
-exec "${here}/bin/lathe" "$@"
+exec "${here}/bin/omega" "$@"
 EOF
     chmod +x "${appimage_dir}/AppRun"
 
     # appimagetool wants the desktop entry and icon at the AppDir root.
-    # TryExec is dropped because `lathe` isn't on PATH for AppImage users,
+    # TryExec is dropped because `omega` isn't on PATH for AppImage users,
     # which would hide the entry once an integration tool installs it.
     sed -e '/^TryExec=/d' \
         "${app_dir}/share/applications/${app_id}.desktop" > "${appimage_dir}/${app_id}.desktop"
-    cp "${app_dir}/share/icons/hicolor/512x512/apps/lathe.png" "${appimage_dir}/lathe.png"
-    ln -s lathe.png "${appimage_dir}/.DirIcon"
+    cp "${app_dir}/share/icons/hicolor/512x512/apps/omega.png" "${appimage_dir}/omega.png"
+    ln -s omega.png "${appimage_dir}/.DirIcon"
 
     runtime_args=()
     if [ -n "${APPIMAGE_RUNTIME:-}" ]; then
@@ -194,4 +194,4 @@ if [ -f "${out_dir}/${appimage_name}" ]; then
 fi
 echo ""
 echo "To create a GitHub release:"
-echo "  gh release create v${version} \"${out_dir}/${archive_name}\" --title \"Lathe v${version}\" --notes \"Release v${version}\""
+echo "  gh release create v${version} \"${out_dir}/${archive_name}\" --title \"Omega v${version}\" --notes \"Release v${version}\""

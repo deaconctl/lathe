@@ -59,7 +59,7 @@ pub async fn request_device_code(client: &Arc<dyn HttpClient>) -> Result<DeviceC
     let client_id = github_client_id();
     if !client_id_is_configured(&client_id) {
         bail!(
-            "GitHub sign-in is not configured. Register a Lathe GitHub OAuth app \
+            "GitHub sign-in is not configured. Register a Omega GitHub OAuth app \
              with device flow enabled and set its client id (or export \
              LATHE_GITHUB_CLIENT_ID) to connect GitHub."
         );
@@ -72,7 +72,7 @@ pub async fn request_device_code(client: &Arc<dyn HttpClient>) -> Result<DeviceC
     let request = Request::post("https://github.com/login/device/code")
         .header("Accept", "application/json")
         .header("Content-Type", "application/x-www-form-urlencoded")
-        .header("User-Agent", "Lathe")
+        .header("User-Agent", "Omega")
         .follow_redirects(http_client::RedirectPolicy::FollowAll)
         .body(AsyncBody::from(body))?;
 
@@ -130,7 +130,7 @@ pub async fn poll_for_token(
     let request = Request::post("https://github.com/login/oauth/access_token")
         .header("Accept", "application/json")
         .header("Content-Type", "application/x-www-form-urlencoded")
-        .header("User-Agent", "Lathe")
+        .header("User-Agent", "Omega")
         .follow_redirects(http_client::RedirectPolicy::FollowAll)
         .body(AsyncBody::from(body))?;
 
@@ -165,7 +165,7 @@ pub async fn fetch_login(client: &Arc<dyn HttpClient>, token: &str) -> Result<St
 
     let request = Request::get("https://api.github.com/user")
         .header("Accept", "application/vnd.github+json")
-        .header("User-Agent", "Lathe")
+        .header("User-Agent", "Omega")
         .header("X-GitHub-Api-Version", "2022-11-28")
         .header("Authorization", format!("Bearer {token}"))
         .follow_redirects(http_client::RedirectPolicy::FollowAll)

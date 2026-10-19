@@ -1289,7 +1289,7 @@ async fn install_release_linux(
     } else {
         String::default()
     };
-    let app_folder_name = format!("lathe{}.app", suffix);
+    let app_folder_name = format!("omega{}.app", suffix);
     let to = linux_install_dir(&running_app_path, &suffix, &home_dir);
     // Older rsync releases can't create missing parent directories.
     fs::create_dir_all(&to)
@@ -1297,7 +1297,7 @@ async fn install_release_linux(
         .with_context(|| format!("failed to create install directory {to:?}"))?;
 
     // Trailing slashes sync the bundle's contents rather than nesting the
-    // lathe{suffix}.app folder inside the install dir.
+    // omega{suffix}.app folder inside the install dir.
     let mut from = extracted.join(&app_folder_name).into_os_string();
     from.push("/");
     let mut to_contents = to.clone().into_os_string();
@@ -1312,7 +1312,7 @@ async fn install_release_linux(
 
     anyhow::ensure!(
         output.status.success(),
-        "failed to copy Lathe update from {:?} to {:?}: {:?}",
+        "failed to copy Omega update from {:?} to {:?}: {:?}",
         from,
         to,
         String::from_utf8_lossy(&output.stderr)
@@ -1321,16 +1321,16 @@ async fn install_release_linux(
     Ok(Some(to.join(LINUX_EDITOR_BINARY)))
 }
 
-const LINUX_EDITOR_BINARY: &str = "libexec/lathe-editor";
+const LINUX_EDITOR_BINARY: &str = "libexec/omega-editor";
 
 /// script/install-fork-linux flattens the bundle into
-/// ~/.local/share/lathe{suffix}, while a hand-extracted tarball keeps the
-/// lathe{suffix}.app folder. Update whichever one is running, but only when
-/// the folder name proves it belongs to Lathe: rsync --delete into a shared
+/// ~/.local/share/omega{suffix}, while a hand-extracted tarball keeps the
+/// omega{suffix}.app folder. Update whichever one is running, but only when
+/// the folder name proves it belongs to Omega: rsync --delete into a shared
 /// prefix like /usr/local would wipe everything else in it.
 fn linux_install_dir(running_app_path: &Path, suffix: &str, home_dir: &Path) -> PathBuf {
-    let app_folder_name = format!("lathe{suffix}.app");
-    let installed_folder_name = format!("lathe{suffix}");
+    let app_folder_name = format!("omega{suffix}.app");
+    let installed_folder_name = format!("omega{suffix}");
     running_app_path
         .ends_with(LINUX_EDITOR_BINARY)
         .then(|| running_app_path.parent()?.parent())
@@ -2184,7 +2184,7 @@ mod tests {
 
         assert_eq!(
             linux_install_dir(
-                Path::new("/home/user/.local/share/lathe-beta/libexec/lathe-editor"),
+                Path::new("/home/user/.local/share/omega-beta/libexec/omega-editor"),
                 "-beta",
                 home,
             ),
@@ -2192,18 +2192,18 @@ mod tests {
         );
         assert_eq!(
             linux_install_dir(
-                Path::new("/home/user/apps/lathe.app/libexec/lathe-editor"),
+                Path::new("/home/user/apps/omega.app/libexec/omega-editor"),
                 "",
                 home,
             ),
-            PathBuf::from("/home/user/apps/lathe.app")
+            PathBuf::from("/home/user/apps/omega.app")
         );
     }
 
     #[test]
     fn test_install_release_appimage_replaces_the_running_file() {
         let dir = tempdir().unwrap();
-        let appimage_path = dir.path().join("Lathe-1.0.0-x86_64-linux.AppImage");
+        let appimage_path = dir.path().join("Omega-1.0.0-x86_64-linux.AppImage");
         let downloaded = dir.path().join("download");
         std::fs::write(&appimage_path, "old").unwrap();
         std::fs::write(&downloaded, "new").unwrap();
@@ -2229,7 +2229,7 @@ mod tests {
         entries.sort();
         assert_eq!(
             entries,
-            ["Lathe-1.0.0-x86_64-linux.AppImage", "download"].map(OsString::from)
+            ["Omega-1.0.0-x86_64-linux.AppImage", "download"].map(OsString::from)
         );
     }
 
@@ -2239,9 +2239,9 @@ mod tests {
         let fallback = PathBuf::from("/home/user/.local/share/lathe-beta");
 
         for running_app_path in [
-            "/usr/local/libexec/lathe-editor",
-            "/home/user/.local/share/lathe/libexec/lathe-editor",
-            "/home/user/lathe-beta/target/release/zed",
+            "/usr/local/libexec/omega-editor",
+            "/home/user/.local/share/omega/libexec/omega-editor",
+            "/home/user/omega-beta/target/release/zed",
         ] {
             assert_eq!(
                 linux_install_dir(Path::new(running_app_path), "-beta", home),

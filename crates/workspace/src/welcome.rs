@@ -525,9 +525,9 @@ impl Render for WelcomePage {
         };
 
         let welcome_label = if self.fallback_to_recent_projects {
-            "Welcome back to Lathe"
+            "Welcome back to Omega"
         } else {
-            "Welcome to Lathe"
+            "Welcome to Omega"
         };
 
         h_flex()
