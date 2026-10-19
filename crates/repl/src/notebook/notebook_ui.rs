@@ -26,7 +26,7 @@ use util::ResultExt as _;
 use workspace::ToolbarItemLocation;
 use workspace::item::{SaveOptions, TabContentParams};
 use workspace::searchable::SearchableItemHandle;
-use workspace::{Item, Pane, ProjectItem};
+use workspace::{FloatingLayout, Item, Pane, ProjectItem};
 
 use super::{
     Cell, CellEvent, CellPosition, CellReconciliation, MarkdownCellEvent, NotebookOutline,
@@ -2271,9 +2271,15 @@ impl NotebookEditor {
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
         let has_outputs = self.has_outputs(window, cx);
+        // The column sits against the card's edge, so in the floating layout it
+        // would otherwise run under the rounded corners and outline.
+        let horizontal_inset = FloatingLayout::get(cx)
+            .map(|floating| floating.content_inset())
+            .unwrap_or_default();
 
         v_flex()
-            .max_w(px(CONTROL_SIZE + 4.0))
+            .max_w(px(CONTROL_SIZE + 4.0) + horizontal_inset * 2.)
+            .px(horizontal_inset)
             .items_center()
             .gap(DynamicSpacing::Base16.rems(cx))
             .justify_between()
