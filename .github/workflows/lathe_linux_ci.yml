@@ -125,7 +125,7 @@ jobs:
         env:
           # Same env as release_fork.yml's build so CI artifacts are
           # release-grade and can be uploaded to a release directly.
-          LATHE_UPDATE_URL: https://api.github.com/repos/paterschris/lathe/releases?per_page=30
+          LATHE_UPDATE_URL: https://updates.lathe-ide.com/releases
           ZED_COMMIT_SHA: ${{ github.sha }}
         run: script/build-fork-linux
 

@@ -9,10 +9,11 @@ use std::sync::Arc;
 use collections::HashSet;
 use git::{GitHostingProvider, ParsedGitRemote, ReviewerCandidate};
 use gpui::{
-    App, DismissEvent, Entity, EventEmitter, FocusHandle, Focusable, SharedString, Task, WeakEntity,
+    AnyElement, App, DismissEvent, Entity, EventEmitter, FocusHandle, Focusable, SharedString,
+    Task, WeakEntity,
 };
 use picker::{Picker, PickerDelegate, PickerEditorPosition};
-use ui::{Checkbox, ListItem, ListItemSpacing, ToggleState, prelude::*};
+use ui::{Checkbox, KeyBinding, ListItem, ListItemSpacing, ToggleState, prelude::*};
 use workspace::ModalView;
 
 use crate::pull_request_view::PullRequestView;
@@ -168,7 +169,7 @@ impl PickerDelegate for ReviewerPickerDelegate {
     }
 
     fn placeholder_text(&self, _window: &mut Window, _cx: &mut App) -> Arc<str> {
-        "Search people, then press tab to tick each one…".into()
+        "Search people, then click or press tab to tick each one…".into()
     }
 
     fn editor_position(&self) -> PickerEditorPosition {
@@ -176,6 +177,10 @@ impl PickerDelegate for ReviewerPickerDelegate {
     }
 
     fn supports_multi_select(&self) -> bool {
+        true
+    }
+
+    fn click_toggles_selection(&self) -> bool {
         true
     }
 
@@ -252,6 +257,53 @@ impl PickerDelegate for ReviewerPickerDelegate {
         self.request(window, cx);
     }
 
+    fn render_footer(
+        &self,
+        window: &mut Window,
+        cx: &mut Context<Picker<Self>>,
+    ) -> Option<AnyElement> {
+        if !matches!(self.status, LoadStatus::Loaded) {
+            return None;
+        }
+        let label: SharedString = match self.chosen.len() {
+            0 => "Request Reviewers".into(),
+            1 => "Request 1 Reviewer".into(),
+            count => format!("Request {count} Reviewers").into(),
+        };
+        let focus_handle = window.focused(cx);
+        Some(
+            h_flex()
+                .w_full()
+                .p_1p5()
+                .gap_2()
+                .justify_between()
+                .border_t_1()
+                .border_color(cx.theme().colors().border_variant)
+                .child(
+                    Button::new("clear-reviewers", "Clear")
+                        .disabled(self.chosen.is_empty())
+                        .on_click(cx.listener(|picker, _, _window, cx| {
+                            picker.delegate.clear_selection(cx);
+                        })),
+                )
+                .child(
+                    Button::new("request-reviewers", label)
+                        .style(ButtonStyle::Filled)
+                        .disabled(self.chosen.is_empty())
+                        .when_some(focus_handle, |button, focus_handle| {
+                            button.key_binding(
+                                KeyBinding::for_action_in(&menu::Confirm, &focus_handle, cx)
+                                    .map(|binding| binding.size(rems_from_px(12_f32))),
+                            )
+                        })
+                        .on_click(cx.listener(|picker, _, window, cx| {
+                            picker.delegate.request(window, cx);
+                        })),
+                )
+                .into_any_element(),
+        )
+    }
+
     fn dismissed(&mut self, _window: &mut Window, cx: &mut Context<Picker<Self>>) {
         self.picker_entity
             .update(cx, |_, cx| cx.emit(DismissEvent))
@@ -295,10 +347,8 @@ impl PickerDelegate for ReviewerPickerDelegate {
                         .inset(true)
                         .spacing(ListItemSpacing::Sparse)
                         .toggle_state(selected)
-                        .start_slot(
-                            Checkbox::new(("reviewer", ix), ToggleState::from(ticked))
-                                .disabled(true),
-                        )
+                        // No click handler of its own: the row click toggles it.
+                        .start_slot(Checkbox::new(("reviewer", ix), ToggleState::from(ticked)))
                         .child(
                             v_flex()
                                 .child(Label::new(candidate.primary_label()))

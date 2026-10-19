@@ -640,6 +640,74 @@ async fn read_shallow_file(shallow_file_path: &Path) -> Result<Option<String>> {
     }
 }
 
+/// Reads the old and new blob contents for every entry of `git ... --raw -z`
+/// output through a single `git cat-file --batch` process.
+async fn load_diff_raw_files(git: &GitBinary, raw_diff: &str) -> Result<Vec<CommitFile>> {
+    let changes = parse_git_diff_raw(raw_diff);
+
+    let mut cat_file_process = git
+        .build_command(&["cat-file", "--batch=%(objectsize)"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .context("starting git cat-file process")?;
+
+    let mut files = Vec::<CommitFile>::new();
+    let stdin = cat_file_process
+        .stdin
+        .take()
+        .context("git cat-file process has no stdin")?;
+    let stdout = cat_file_process
+        .stdout
+        .take()
+        .context("git cat-file process has no stdout")?;
+    let mut stdin = BufWriter::with_capacity(512, stdin);
+    let mut stdout = BufReader::new(stdout);
+    let mut info_line = String::new();
+    let mut newline = [b'\0'];
+    for change in changes {
+        let change = change?;
+        let path = change.path;
+        // git outputs `/`-delimited paths even on Windows.
+        let Some(rel_path) = RelPath::from_unix_str(path).log_err() else {
+            continue;
+        };
+
+        let objects = [change.new_object, change.old_object];
+        let mut has_blobs = false;
+        for object in objects.iter().flatten() {
+            if object.kind == CommitDiffObjectKind::Blob {
+                stdin.write_all(object.oid.as_bytes()).await?;
+                stdin.write_all(b"\n").await?;
+                has_blobs = true;
+            }
+        }
+        if has_blobs {
+            stdin.flush().await?;
+        }
+
+        let [new_object, old_object] = objects;
+        let new_object =
+            load_commit_object(new_object, &mut stdout, &mut info_line, &mut newline).await?;
+        let old_object =
+            load_commit_object(old_object, &mut stdout, &mut info_line, &mut newline).await?;
+        let is_binary = new_object.as_ref().is_some_and(|object| object.is_binary)
+            || old_object.as_ref().is_some_and(|object| object.is_binary);
+        let new_content = new_object.map(|object| object.content);
+        let old_content = old_object.map(|object| object.content);
+
+        files.push(CommitFile {
+            path: RepoPath(Arc::from(rel_path)),
+            old_content,
+            new_content,
+            is_binary,
+        })
+    }
+
+    Ok(files)
+}
+
 async fn is_shallow_boundary_commit(
     git: &GitBinary,
     shallow_file_path: &Path,
@@ -952,6 +1020,14 @@ pub trait GitRepository: Send + Sync {
         &self,
         commit: String,
         ignore_shallow_boundary: bool,
+        cx: AsyncApp,
+    ) -> BoxFuture<'_, Result<CommitDiff>>;
+    /// Loads the tree diff between two arbitrary revisions, with the same
+    /// shape as [`GitRepository::load_commit`]. `base` is the old side.
+    fn load_range_diff(
+        &self,
+        base: String,
+        head: String,
         cx: AsyncApp,
     ) -> BoxFuture<'_, Result<CommitDiff>>;
     fn blame(
@@ -1663,70 +1739,42 @@ impl GitRepository for RealGitRepository {
             );
 
             let show_stdout = String::from_utf8_lossy(&show_output.stdout);
-            let changes = parse_git_diff_raw(&show_stdout);
+            let files = load_diff_raw_files(&git, &show_stdout).await?;
+            Ok(CommitDiff {
+                files,
+                is_shallow_boundary: false,
+            })
+        })
+        .boxed()
+    }
 
-            let mut cat_file_process = git
-                .build_command(&["cat-file", "--batch=%(objectsize)"])
-                .stdin(Stdio::piped())
+    fn load_range_diff(
+        &self,
+        base: String,
+        head: String,
+        cx: AsyncApp,
+    ) -> BoxFuture<'_, Result<CommitDiff>> {
+        let git = self.git_binary();
+        cx.background_spawn(async move {
+            let diff_output = git
+                .build_command(&["diff", "--raw", "-z", "--no-renames", "--no-abbrev"])
+                .arg(&base)
+                .arg(&head)
+                .arg("--")
+                .stdin(Stdio::null())
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped())
-                .spawn()
-                .context("starting git cat-file process")?;
+                .output()
+                .await
+                .context("starting git diff process")?;
+            anyhow::ensure!(
+                diff_output.status.success(),
+                "git diff failed: {}",
+                String::from_utf8_lossy(&diff_output.stderr)
+            );
 
-            let mut files = Vec::<CommitFile>::new();
-            let stdin = cat_file_process
-                .stdin
-                .take()
-                .context("git cat-file process has no stdin")?;
-            let stdout = cat_file_process
-                .stdout
-                .take()
-                .context("git cat-file process has no stdout")?;
-            let mut stdin = BufWriter::with_capacity(512, stdin);
-            let mut stdout = BufReader::new(stdout);
-            let mut info_line = String::new();
-            let mut newline = [b'\0'];
-            for change in changes {
-                let change = change?;
-                let path = change.path;
-                // git-show outputs `/`-delimited paths even on Windows.
-                let Some(rel_path) = RelPath::from_unix_str(path).log_err() else {
-                    continue;
-                };
-
-                let objects = [change.new_object, change.old_object];
-                let mut has_blobs = false;
-                for object in objects.iter().flatten() {
-                    if object.kind == CommitDiffObjectKind::Blob {
-                        stdin.write_all(object.oid.as_bytes()).await?;
-                        stdin.write_all(b"\n").await?;
-                        has_blobs = true;
-                    }
-                }
-                if has_blobs {
-                    stdin.flush().await?;
-                }
-
-                let [new_object, old_object] = objects;
-                let new_object =
-                    load_commit_object(new_object, &mut stdout, &mut info_line, &mut newline)
-                        .await?;
-                let old_object =
-                    load_commit_object(old_object, &mut stdout, &mut info_line, &mut newline)
-                        .await?;
-                let is_binary = new_object.as_ref().is_some_and(|object| object.is_binary)
-                    || old_object.as_ref().is_some_and(|object| object.is_binary);
-                let new_content = new_object.map(|object| object.content);
-                let old_content = old_object.map(|object| object.content);
-
-                files.push(CommitFile {
-                    path: RepoPath(Arc::from(rel_path)),
-                    old_content,
-                    new_content,
-                    is_binary,
-                })
-            }
-
+            let diff_stdout = String::from_utf8_lossy(&diff_output.stdout);
+            let files = load_diff_raw_files(&git, &diff_stdout).await?;
             Ok(CommitDiff {
                 files,
                 is_shallow_boundary: false,
@@ -5935,6 +5983,78 @@ mod tests {
             assert_eq!(object.is_binary, expected_binary);
             assert_eq!(object.content, bytes);
         }
+    }
+
+    #[gpui::test]
+    async fn test_load_range_diff_spans_multiple_commits(cx: &mut TestAppContext) {
+        disable_git_global_config();
+        cx.executor().allow_parking();
+
+        let repo_dir = tempfile::tempdir().expect("failed to create temporary repository");
+        git_init_repo(repo_dir.path());
+        fs::write(repo_dir.path().join("a.txt"), "one\n").expect("failed to write a.txt");
+        fs::write(repo_dir.path().join("b.txt"), "keep\n").expect("failed to write b.txt");
+        git_command(repo_dir.path(), ["add", "."]);
+        git_command(repo_dir.path(), ["commit", "-m", "first"]);
+
+        fs::write(repo_dir.path().join("a.txt"), "two\n").expect("failed to write a.txt");
+        fs::write(repo_dir.path().join("c.txt"), "new\n").expect("failed to write c.txt");
+        git_command(repo_dir.path(), ["add", "."]);
+        git_command(repo_dir.path(), ["commit", "-m", "second"]);
+
+        fs::write(repo_dir.path().join("a.txt"), "three\n").expect("failed to write a.txt");
+        git_command(repo_dir.path(), ["rm", "-q", "b.txt"]);
+        git_command(repo_dir.path(), ["add", "."]);
+        git_command(repo_dir.path(), ["commit", "-m", "third"]);
+
+        let repository = RealGitRepository::new(
+            &repo_dir.path().join(".git"),
+            None,
+            Some("git".into()),
+            cx.executor(),
+        )
+        .expect("failed to open repository");
+
+        let range_diff = repository
+            .load_range_diff("HEAD~2".to_string(), "HEAD".to_string(), cx.to_async())
+            .await
+            .expect("failed to load range diff");
+        let files = range_diff
+            .files
+            .iter()
+            .map(|file| {
+                (
+                    file.path.as_unix_str(),
+                    file.old_content.as_deref(),
+                    file.new_content.as_deref(),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            files,
+            [
+                (
+                    "a.txt",
+                    Some(b"one\n".as_slice()),
+                    Some(b"three\n".as_slice())
+                ),
+                ("b.txt", Some(b"keep\n".as_slice()), None),
+                ("c.txt", None, Some(b"new\n".as_slice())),
+            ]
+        );
+        assert!(!range_diff.is_shallow_boundary);
+
+        let reversed = repository
+            .load_range_diff("HEAD".to_string(), "HEAD~2".to_string(), cx.to_async())
+            .await
+            .expect("failed to load reversed range diff");
+        let a_file = reversed
+            .files
+            .iter()
+            .find(|file| file.path.as_unix_str() == "a.txt")
+            .expect("a.txt should be in the reversed diff");
+        assert_eq!(a_file.old_content.as_deref(), Some(b"three\n".as_slice()));
+        assert_eq!(a_file.new_content.as_deref(), Some(b"one\n".as_slice()));
     }
 
     #[gpui::test]
