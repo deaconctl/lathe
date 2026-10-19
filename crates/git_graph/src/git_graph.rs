@@ -2812,6 +2812,15 @@ impl GitGraph {
     /// Toggle whether `idx` is in the marked set. Does not move the primary
     /// selection.
     fn toggle_marked(&mut self, idx: usize) {
+        // The caller moves the primary selection to `idx` right after this, so
+        // the commit that was selected before the first Cmd-click has to be
+        // marked now or it silently drops out of the multi-selection.
+        if self.marked_entry_idxs.is_empty()
+            && let Some(selected) = self.selected_entry_idx
+            && selected != idx
+        {
+            self.marked_entry_idxs.insert(selected);
+        }
         if !self.marked_entry_idxs.remove(&idx) {
             self.marked_entry_idxs.insert(idx);
         }
@@ -3168,6 +3177,34 @@ impl GitGraph {
             self.workspace.clone(),
             None,
             None,
+            window,
+            cx,
+        );
+    }
+
+    fn open_range_view(
+        &mut self,
+        base_index: usize,
+        head_index: usize,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let (Some(base_entry), Some(head_entry)) = (
+            self.graph_data.commits.get(base_index),
+            self.graph_data.commits.get(head_index),
+        ) else {
+            return;
+        };
+
+        let Some(repository) = self.get_repository(cx) else {
+            return;
+        };
+
+        CommitView::open_range(
+            base_entry.data.sha.to_string(),
+            head_entry.data.sha.to_string(),
+            repository.downgrade(),
+            self.workspace.clone(),
             window,
             cx,
         );
@@ -4989,12 +5026,28 @@ impl GitGraph {
         let context_menu = ContextMenu::build(window, cx, |mut menu, window, _cx| {
             menu = menu.header(format!("Commit {sha_short}"));
             menu = menu.entry(
-                "View Diff",
+                "View Diff Against Parent",
                 Some(OpenCommitView.boxed_clone()),
                 window.handler_for(&git_graph, move |this, window, cx| {
                     this.open_commit_view(row_index, window, cx);
                 }),
             );
+
+            // Rows are listed newest first, so the lower index is the newer
+            // commit and becomes the new side of the diff. Unlike squash, the
+            // two commits don't need to share a lane: a tree diff works
+            // between any pair.
+            if let [newer_index, older_index] = self.multi_selection()[..]
+                && (row_index == newer_index || row_index == older_index)
+            {
+                menu = menu.entry(
+                    "Compare Commits",
+                    None,
+                    window.handler_for(&git_graph, move |this, window, cx| {
+                        this.open_range_view(older_index, newer_index, window, cx);
+                    }),
+                );
+            }
 
             if !is_head {
                 menu = menu.entry("Checkout this commit", None, {
@@ -8804,6 +8857,68 @@ mod tests {
                 SharedString::from("tag: v1.0.0"),
             ]]
         );
+    }
+
+    #[gpui::test]
+    async fn test_platform_click_keeps_previously_selected_commit(cx: &mut TestAppContext) {
+        init_test(cx);
+
+        let fs = FakeFs::new(cx.executor());
+        fs.insert_tree(
+            Path::new("/project"),
+            serde_json::json!({
+                ".git": {},
+                "file.txt": "content",
+            }),
+        )
+        .await;
+
+        let mut rng = StdRng::seed_from_u64(42);
+        let commits = generate_random_commit_dag(&mut rng, 10, false);
+        fs.set_graph_commits(Path::new("/project/.git"), commits.clone());
+
+        let project = Project::test(fs.clone(), [Path::new("/project")], cx).await;
+        cx.run_until_parked();
+
+        let repository = project.read_with(cx, |project, cx| {
+            project
+                .active_repository(cx)
+                .expect("should have repository")
+        });
+
+        let (multi_workspace, cx) = cx.add_window_view(|window, cx| {
+            workspace::MultiWorkspace::test_new(project.clone(), window, cx)
+        });
+
+        let workspace_weak =
+            multi_workspace.read_with(&*cx, |multi, _| multi.workspace().downgrade());
+
+        let git_graph = cx.new_window_entity(|window, cx| {
+            GitGraph::new(
+                repository.read(cx).id,
+                project.read(cx).git_store().clone(),
+                workspace_weak,
+                None,
+                window,
+                cx,
+            )
+        });
+        cx.run_until_parked();
+
+        // Mirrors `handle_entry_click`: a plain click selects, a platform
+        // click marks the row and then moves the selection to it.
+        git_graph.update(cx, |graph, cx| {
+            assert!(graph.graph_data.commits.len() >= 6);
+            graph.select_entry(5, ScrollStrategy::Nearest, cx);
+
+            graph.toggle_marked(2);
+            graph.select_entry(2, ScrollStrategy::Nearest, cx);
+            assert_eq!(graph.multi_selection(), vec![2, 5]);
+
+            graph.toggle_marked(4);
+            graph.select_entry(4, ScrollStrategy::Nearest, cx);
+            assert_eq!(graph.multi_selection(), vec![2, 4, 5]);
+        });
     }
 
     #[gpui::test]

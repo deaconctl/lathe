@@ -774,6 +774,14 @@ impl AutoUpdater {
 
         if let Some(api_url) = lathe_update_base_url(release_channel) {
             let prefer_appimage = asset == "zed" && util::running_appimage().is_some();
+            let ping = lathe_update::UpdatePing {
+                installation_id: client.telemetry().installation_id(),
+                metrics_enabled: client.telemetry().metrics_enabled(),
+                version: this.read_with(cx, |this, _| this.current_version.to_string()),
+                channel: release_channel,
+                os: os.to_owned(),
+                arch: arch.to_owned(),
+            };
             return lathe_update::get_release_asset(
                 client.http_client(),
                 &api_url,
@@ -781,6 +789,7 @@ impl AutoUpdater {
                 os,
                 arch,
                 prefer_appimage,
+                &ping,
             )
             .await;
         }

@@ -527,7 +527,8 @@ message Envelope {
     GetTerminalShellResponse get_terminal_shell_response = 495;
     GitFileHistory git_file_history = 496;
     GitFileHistoryResponse git_file_history_response = 497;
-    GitChangeToCommit git_change_to_commit = 498; // current max
+    GitChangeToCommit git_change_to_commit = 498;
+    LoadRangeDiff load_range_diff = 499; // current max
   }
 
   reserved 87 to 88;

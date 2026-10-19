@@ -307,6 +307,13 @@ message LoadCommitDiff {
   bool ignore_shallow_boundary = 5;
 }
 
+message LoadRangeDiff {
+  uint64 project_id = 1;
+  uint64 repository_id = 2;
+  string base = 3;
+  string head = 4;
+}
+
 message LoadCommitDiffResponse {
   repeated CommitFile files = 1;
   bool is_shallow_boundary = 2;
