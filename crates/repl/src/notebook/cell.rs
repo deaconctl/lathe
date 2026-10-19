@@ -5,8 +5,8 @@ use std::time::{Duration, Instant};
 use editor::{Editor, EditorMode, ExcerptRange, MultiBuffer, PathKey, SizingBehavior};
 use futures::future::Shared;
 use gpui::{
-    App, Entity, EventEmitter, Focusable, Hsla, InteractiveElement, RetainAllImageCache,
-    StatefulInteractiveElement, Task, prelude::*,
+    App, ClipboardItem, Entity, EventEmitter, Focusable, Hsla, InteractiveElement,
+    RetainAllImageCache, StatefulInteractiveElement, Task, prelude::*,
 };
 use language::{Buffer, Capability, Language, LanguageRegistry, Point};
 use markdown::{Markdown, MarkdownElement, MarkdownFont, MarkdownStyle};
@@ -14,7 +14,7 @@ use nbformat::v4::{CellId, CellMetadata, CellType};
 use project::Project;
 use runtimelib::{JupyterMessage, JupyterMessageContent, Stdio};
 use settings::Settings as _;
-use ui::{CommonAnimationExt, IconButtonShape, prelude::*};
+use ui::{CommonAnimationExt, CopyButton, IconButtonShape, prelude::*};
 use util::ResultExt;
 use zed_actions::notebook::InterruptKernel;
 
@@ -941,6 +941,27 @@ impl CodeCell {
         !self.outputs.is_empty()
     }
 
+    fn outputs_clipboard_content(&self, window: &Window, cx: &App) -> Option<ClipboardItem> {
+        let mut items: Vec<ClipboardItem> = self
+            .outputs
+            .iter()
+            .filter_map(|output| output.view.clipboard_content(window, cx))
+            .collect();
+
+        // A lone output is copied as-is so image outputs keep their image data;
+        // several outputs can only be combined as text.
+        if items.len() == 1 {
+            return items.pop();
+        }
+
+        let text = items
+            .iter()
+            .filter_map(ClipboardItem::text)
+            .collect::<Vec<_>>()
+            .join("\n");
+        (!text.is_empty()).then(|| ClipboardItem::new_string(text))
+    }
+
     pub fn has_error_output(&self) -> bool {
         self.outputs
             .iter()
@@ -1121,7 +1142,22 @@ impl CodeCell {
                         .items_center()
                         .justify_center()
                         .bg(cx.theme().colors().tab_bar_background)
-                        .child(IconButton::new("control", IconName::Ellipsis)),
+                        .child({
+                            let cell = cx.entity().downgrade();
+                            CopyButton::new(("copy-cell-output", cx.entity_id()), "")
+                                .tooltip_label("Copy Output")
+                                .custom_on_click(move |window, cx| {
+                                    let clipboard_item = cell
+                                        .read_with(cx, |cell, cx| {
+                                            cell.outputs_clipboard_content(window, cx)
+                                        })
+                                        .ok()
+                                        .flatten();
+                                    if let Some(clipboard_item) = clipboard_item {
+                                        cx.write_to_clipboard(clipboard_item);
+                                    }
+                                })
+                        }),
                 )
             })
     }

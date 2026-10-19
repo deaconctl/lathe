@@ -234,6 +234,25 @@ impl Output {
         )
     }
 
+    pub fn clipboard_content(&self, window: &Window, cx: &App) -> Option<ClipboardItem> {
+        match self {
+            Self::Plain { content, .. } => content.clipboard_content(window, cx),
+            Self::Markdown { content, .. } => content.clipboard_content(window, cx),
+            Self::Stream { content, .. } => content.clipboard_content(window, cx),
+            Self::Image { content, .. } => content.clipboard_content(window, cx),
+            Self::Table { content, .. } => content.clipboard_content(window, cx),
+            Self::Json { content, .. } => content.clipboard_content(window, cx),
+            Self::Message(message) => Some(ClipboardItem::new_string(message.clone())),
+            Self::ErrorOutput(error) => Some(ClipboardItem::new_string(format!(
+                "{}: {}\n{}",
+                error.ename,
+                error.evalue,
+                error.traceback.read(cx).full_text(cx)
+            ))),
+            Self::ClearOutputWaitMarker => None,
+        }
+    }
+
     pub fn content(&self, window: &mut Window, cx: &mut App) -> Option<AnyElement> {
         match self {
             Self::Plain { content, .. } => Some(content.clone().into_any_element()),
