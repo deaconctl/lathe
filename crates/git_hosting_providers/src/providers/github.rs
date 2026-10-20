@@ -18,7 +18,8 @@ use git::{
     GitHostAuthKind, GitHostingProvider, NewPullRequest, ParsedGitRemote, PullRequest,
     PullRequestAuthError, PullRequestChecks, PullRequestDetail, PullRequestListFilter,
     PullRequestMergeMethod, PullRequestReviewComment, PullRequestReviewVerdict,
-    PullRequestReviewer, PullRequestState, PullRequestSummary, RemoteUrl, ReviewerCandidate,
+    PullRequestReviewer, PullRequestState, PullRequestSummary, RemoteUrl, RepositoryAccess,
+    ReviewerCandidate,
 };
 
 use crate::get_host_from_git_remote_url;
@@ -519,6 +520,51 @@ impl GitHostingProvider for Github {
         let repository: GithubRepository =
             serde_json::from_slice(&bytes).context("parsing GitHub repository")?;
         Ok(repository.default_branch.map(SharedString::from))
+    }
+
+    async fn repository_access(
+        &self,
+        remote: &ParsedGitRemote,
+        auth: Option<GitHostAuth>,
+        http_client: Arc<dyn HttpClient>,
+    ) -> Result<Option<RepositoryAccess>> {
+        let api = self.api_base()?;
+        let url = format!(
+            "{api}/repos/{owner}/{repo}",
+            owner = remote.owner,
+            repo = remote.repo,
+        );
+        let request = github_request(
+            GithubMethod::Get,
+            &url,
+            "application/vnd.github+json",
+            &auth,
+            None,
+        )?;
+        let mut response = http_client
+            .send(request)
+            .await
+            .context("error while checking GitHub repository access")?;
+        // GitHub answers 404 rather than 403 for a private repository the
+        // account cannot see, so all three mean "this account can't use it".
+        if matches!(response.status().as_u16(), 401 | 403 | 404) {
+            return Ok(Some(RepositoryAccess::None));
+        }
+        let mut bytes = Vec::new();
+        response.body_mut().read_to_end(&mut bytes).await?;
+        if !response.status().is_success() {
+            bail!(
+                "checking GitHub repository access failed ({})",
+                response.status().as_u16()
+            );
+        }
+        let repository: GithubRepository =
+            serde_json::from_slice(&bytes).context("parsing GitHub repository")?;
+        Ok(Some(
+            repository
+                .permissions
+                .map_or(RepositoryAccess::Read, |permissions| permissions.access()),
+        ))
     }
 
     async fn get_pull_request(

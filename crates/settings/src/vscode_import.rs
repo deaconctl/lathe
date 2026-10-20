@@ -270,6 +270,7 @@ impl VsCodeSettings {
             session: None,
             status_bar: self.status_bar_settings_content(),
             tab_bar: self.tab_bar_settings_content(),
+            tab_switcher: None,
             tabs: self.item_settings_content(),
             telemetry: self.telemetry_settings_content(),
             terminal: self.terminal_settings_content(),
@@ -1096,6 +1097,7 @@ impl VsCodeSettings {
             ui_layout: None,
             ui_card_gap: None,
             ui_card_radius: None,
+            use_display_p3: None,
             autosave: self.read_enum("files.autoSave", |s| match s {
                 "off" => Some(AutosaveSetting::Off),
                 "afterDelay" => Some(AutosaveSetting::AfterDelay {

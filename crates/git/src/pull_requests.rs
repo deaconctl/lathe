@@ -362,6 +362,20 @@ impl std::fmt::Debug for GitHostAuth {
 /// password). Carries the canonical host so the UI can offer a targeted
 /// reconnect for that account, rather than the generic error shown for other
 /// 4xx responses (rate limits, permission denials) that reconnecting cannot fix.
+/// How much an authenticated account can do in a repository. Ordered so that a
+/// greater value is the more capable account, which is how the pull-request
+/// panel picks between several accounts connected to the same host.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum RepositoryAccess {
+    /// The repository is invisible to the account, or its credential was
+    /// rejected.
+    None,
+    Read,
+    /// Can push, which on every supported host is also what review and merge
+    /// operations require.
+    Write,
+}
+
 #[derive(Debug, Clone)]
 pub struct PullRequestAuthError {
     pub host: SharedString,

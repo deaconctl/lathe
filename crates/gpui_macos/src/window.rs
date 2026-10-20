@@ -11,9 +11,10 @@ use cocoa::{
     appkit::{
         NSApplication, NSBackingStoreBuffered, NSColor, NSEvent, NSEventModifierFlags, NSEventType,
         NSFilenamesPboardType, NSPasteboard, NSRequestUserAttentionType, NSScreen, NSView,
-        NSViewHeightSizable, NSViewWidthSizable, NSVisualEffectMaterial, NSVisualEffectState,
-        NSVisualEffectView, NSWindow, NSWindowCollectionBehavior, NSWindowOcclusionState,
-        NSWindowOrderingMode, NSWindowStyleMask, NSWindowTitleVisibility,
+        NSViewHeightSizable, NSViewWidthSizable, NSVisualEffectBlendingMode,
+        NSVisualEffectMaterial, NSVisualEffectState, NSVisualEffectView, NSWindow,
+        NSWindowCollectionBehavior, NSWindowOcclusionState, NSWindowOrderingMode,
+        NSWindowStyleMask, NSWindowTitleVisibility,
     },
     base::{id, nil},
     foundation::{
@@ -972,6 +973,7 @@ impl MacWindow {
             display_id,
             window_min_size,
             tabbing_identifier,
+            use_display_p3,
             ..
         }: WindowParams,
         cursor_visible: Arc<AtomicBool>,
@@ -1105,6 +1107,7 @@ impl MacWindow {
                     native_view as *mut _,
                     bounds.size.map(|pixels| pixels.as_f32()),
                     false,
+                    use_display_p3,
                 ),
                 request_frame_callback: None,
                 event_callback: None,
@@ -3813,9 +3816,13 @@ fn display_id_for_screen(screen: id) -> Option<CGDirectDisplayID> {
 extern "C" fn blurred_view_init_with_frame(this: &Object, _: Sel, frame: NSRect) -> id {
     unsafe {
         let view = msg_send![super(this, class!(NSVisualEffectView)), initWithFrame: frame];
-        // Use a colorless semantic material. The default value `AppearanceBased`, though not
-        // manually set, is deprecated.
-        NSVisualEffectView::setMaterial_(view, NSVisualEffectMaterial::Selection);
+        // A window-background material, whose tint and extra saturation
+        // `blurred_view_update_layer` strips, leaving only the blur. `Selection`, used before,
+        // has no `CABackdropLayer` on macOS 27, so nothing behind the window was blurred. (Setting
+        // a material also avoids the deprecated default, `AppearanceBased`.)
+        NSVisualEffectView::setMaterial_(view, NSVisualEffectMaterial::UnderWindowBackground);
+        // The default, but blurring what's behind the window is this view's whole purpose.
+        NSVisualEffectView::setBlendingMode_(view, NSVisualEffectBlendingMode::BehindWindow);
         NSVisualEffectView::setState_(view, NSVisualEffectState::Active);
         view
     }

@@ -2,6 +2,23 @@
 
 Most recent releases first. Beta releases (`-beta` suffix) ship as GitHub pre-releases and typically batch new features ahead of a stable cut.
 
+## v1.13.0-beta - 2026-10-20
+
+Mostly about accounts. Switching AI accounts no longer leaves your open thread behind, and the pull request panel figures out which git account to use per repo.
+
+### Added
+
+- **Switch AI accounts without starting a new thread.** Pick another account from the chip in the agent panel and the thread you're in moves over with its history. It used to keep running on the old account (and billing it) until you opened a new thread. A small spinner sits next to the account name while it reloads, and the conversation stays on screen. Works for Claude and Codex. Gemini threads still need a new thread after a switch.
+- **The right git account per repo.** With two GitHub (or GitLab, or Bitbucket) accounts connected, the pull request panel checks which one can actually push to each repo and uses that. No more switching accounts by hand because one of them can't see a private repo. Your workspace pick still wins when both can.
+- Agents get the same account. `gh` and `glab` run from an agent's terminal now act as whichever account the pull request panel uses for that repo, instead of whatever your shell happens to be logged into. A token you set in the agent's own settings is left alone.
+
+### Under the hood
+
+- Caught up with upstream Zed (115 commits), mostly agent connection work.
+- Linux installs without `rsync` weren't counted as active installs, since the update check bailed before checking in. They still can't update themselves. They do get counted now.
+
+---
+
 ## v1.12.0 - 2026-10-16
 
 The first stable release since 1.8.0. Everything from the 1.9.0, 1.10.0, 1.10.1, 1.11.0 and 1.11.2 betas is in here, plus commit comparison in the git graph and a change to how update checks work.

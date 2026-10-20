@@ -1073,17 +1073,17 @@ impl PullRequestPanel {
             owner: remote.owner.clone(),
             repo: remote.repo.clone(),
         };
-        let host = provider.base_url().host_str().map(|host| host.to_string());
         section._enrich_task = Some(cx.spawn(async move |this, cx| {
-            let auth = match host.as_deref() {
-                Some(host) => {
-                    { git::git_host_credentials::auth_for_host(cx, Some(workspace_id), host) }
-                        .await
-                        .ok()
-                        .flatten()
-                }
-                None => None,
-            };
+            let auth = git::git_host_credentials::auth_for_repository(
+                cx,
+                Some(workspace_id),
+                provider.clone(),
+                &remote,
+                http_client.clone(),
+            )
+            .await
+            .ok()
+            .flatten();
             // Process in small chunks so a large list doesn't fire dozens of
             // simultaneous requests at the host.
             for chunk in stale.chunks(5) {
@@ -1724,6 +1724,7 @@ impl PullRequestPanel {
         let id = section.id;
         let state = section.state.clone();
         let display_name = section.display_name.clone();
+        let account_login = self.section_account_login(section, cx);
         let count = section.total();
         let loading = matches!(state, LoadState::Loading);
         let list_id: SharedString = format!("pull-request-panel-rows-{}", section.id.0).into();
@@ -1857,6 +1858,7 @@ impl PullRequestPanel {
             .child(render_repo_label(
                 id,
                 display_name,
+                account_login,
                 count,
                 loading,
                 is_collapsed,
@@ -1867,6 +1869,24 @@ impl PullRequestPanel {
                     .child(body)
             })
             .into_any_element()
+    }
+
+    /// The login a section's requests go out as, shown only when the host has
+    /// several connected accounts, since that is when the panel picks one per
+    /// repository and it may differ from the account menu's.
+    fn section_account_login(&self, section: &RepoSection, cx: &App) -> Option<SharedString> {
+        let (provider, remote) = section.host_context.as_ref()?;
+        let host = provider.base_url().host_str()?.to_string();
+        if git::git_host_credentials::accounts(cx, &host).len() < 2 {
+            return None;
+        }
+        let account = git::git_host_credentials::account_for_repository(
+            cx,
+            Some(self.workspace.entity_id()),
+            &host,
+            remote,
+        )?;
+        (!account.username.is_empty()).then(|| account.username.into())
     }
 
     /// The divider below an expanded section, which doubles as the drag target
@@ -2209,6 +2229,7 @@ impl PullRequestPanel {
 fn render_repo_label(
     id: RepositoryId,
     name: SharedString,
+    account_login: Option<SharedString>,
     count: usize,
     loading: bool,
     is_collapsed: bool,
@@ -2240,6 +2261,14 @@ fn render_repo_label(
                 .color(Color::Muted),
         )
         .child(Label::new(name).size(LabelSize::XSmall).truncate())
+        .when_some(account_login, |this, login| {
+            this.child(
+                Label::new(format!("as {login}"))
+                    .size(LabelSize::XSmall)
+                    .color(Color::Muted)
+                    .truncate(),
+            )
+        })
         .child(
             Label::new(if loading {
                 "loading…".to_string()
@@ -2421,14 +2450,16 @@ async fn load_pull_requests(
         // Resolve the credential for THIS repo's host only. We never fall back to
         // another host's token, so a Bitbucket repository without a Bitbucket
         // credential surfaces a connect prompt instead of an empty GitHub result.
-        let host = provider.base_url().host_str().map(|host| host.to_string());
-        let auth = match host.as_deref() {
-            Some(host) => git::git_host_credentials::auth_for_host(cx, Some(workspace_id), host)
-                .await
-                .ok()
-                .flatten(),
-            None => None,
-        };
+        let auth = git::git_host_credentials::auth_for_repository(
+            cx,
+            Some(workspace_id),
+            provider.clone(),
+            &parsed,
+            http_client.clone(),
+        )
+        .await
+        .ok()
+        .flatten();
         if auth.is_none() {
             if connect_hint.is_none() {
                 connect_hint = Some(

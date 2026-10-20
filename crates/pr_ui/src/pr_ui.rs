@@ -15,6 +15,11 @@ pub fn init(cx: &mut gpui::App) {
     cx.observe_new(|workspace: &mut Workspace, _, cx| {
         register(workspace);
         connect_modal::load_workspace_accounts(workspace, cx);
+        git::git_host_credentials::register_project_workspace(
+            workspace.project().entity_id(),
+            cx.entity_id(),
+            cx,
+        );
     })
     .detach();
 }

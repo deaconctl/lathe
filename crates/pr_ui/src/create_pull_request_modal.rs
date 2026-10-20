@@ -1,4 +1,4 @@
-use anyhow::{Context as _, Result};
+use anyhow::Result;
 use git::{
     GitHostingProvider, GitHostingProviderRegistry, NewPullRequest, ParsedGitRemote,
     parse_git_remote_url,
@@ -130,16 +130,16 @@ impl CreatePullRequestModal {
                 return;
             };
 
-            let host = provider.base_url().host_str().map(|host| host.to_string());
-            let auth = match host.as_deref() {
-                Some(host) => {
-                    git::git_host_credentials::auth_for_host(cx, Some(workspace_id), host)
-                        .await
-                        .ok()
-                        .flatten()
-                }
-                None => None,
-            };
+            let auth = git::git_host_credentials::auth_for_repository(
+                cx,
+                Some(workspace_id),
+                provider.clone(),
+                &remote,
+                http_client.clone(),
+            )
+            .await
+            .ok()
+            .flatten();
             let default_branch = provider
                 .default_branch(
                     &ParsedGitRemote {
@@ -304,15 +304,16 @@ async fn create(
     workspace_id: gpui::EntityId,
     cx: &mut gpui::AsyncApp,
 ) -> Result<(git::PullRequestSummary, ParsedGitRemote)> {
-    let host = provider
-        .base_url()
-        .host_str()
-        .map(|host| host.to_string())
-        .context("hosting provider has no host")?;
-    let auth = git::git_host_credentials::auth_for_host(cx, Some(workspace_id), &host)
-        .await
-        .ok()
-        .flatten();
+    let auth = git::git_host_credentials::auth_for_repository(
+        cx,
+        Some(workspace_id),
+        provider.clone(),
+        &remote,
+        http_client.clone(),
+    )
+    .await
+    .ok()
+    .flatten();
     let remote_for_call = ParsedGitRemote {
         owner: remote.owner.clone(),
         repo: remote.repo.clone(),

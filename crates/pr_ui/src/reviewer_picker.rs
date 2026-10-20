@@ -63,17 +63,17 @@ impl ReviewerPicker {
         cx: &mut Context<Self>,
     ) {
         let http_client = cx.http_client();
-        let host = provider.base_url().host_str().map(|host| host.to_string());
         cx.spawn(async move |_, cx| {
-            let auth = match host.as_deref() {
-                Some(host) => {
-                    { git::git_host_credentials::auth_for_host(cx, Some(workspace_id), host) }
-                        .await
-                        .ok()
-                        .flatten()
-                }
-                None => None,
-            };
+            let auth = git::git_host_credentials::auth_for_repository(
+                cx,
+                Some(workspace_id),
+                provider.clone(),
+                &remote,
+                http_client.clone(),
+            )
+            .await
+            .ok()
+            .flatten();
             let result = provider
                 .list_reviewer_candidates(&remote, auth, http_client)
                 .await;
