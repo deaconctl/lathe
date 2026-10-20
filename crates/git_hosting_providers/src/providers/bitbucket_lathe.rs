@@ -354,6 +354,49 @@ pub(super) async fn bitbucket_send(
     Ok(bytes)
 }
 
+/// Sends a request and returns its status alongside the body, for callers that
+/// treat some failure statuses as answers rather than errors.
+pub(super) async fn bitbucket_send_with_status(
+    client: &Arc<dyn HttpClient>,
+    request: Request<AsyncBody>,
+    context: &str,
+) -> Result<(u16, Vec<u8>)> {
+    let mut response = client
+        .send(request)
+        .await
+        .with_context(|| format!("error while {context}"))?;
+    let mut bytes = Vec::new();
+    response.body_mut().read_to_end(&mut bytes).await?;
+    Ok((response.status().as_u16(), bytes))
+}
+
+#[derive(Deserialize)]
+pub(super) struct BitbucketRepositoryPermissions {
+    #[serde(default)]
+    values: Vec<BitbucketRepositoryPermission>,
+}
+
+#[derive(Deserialize)]
+struct BitbucketRepositoryPermission {
+    #[serde(default)]
+    permission: String,
+}
+
+impl BitbucketRepositoryPermissions {
+    /// The strongest permission the account holds, or `None` when the
+    /// repository has no explicit permission entry for it.
+    pub(super) fn access(&self) -> Option<RepositoryAccess> {
+        self.values
+            .iter()
+            .filter_map(|value| match value.permission.as_str() {
+                "admin" | "write" => Some(RepositoryAccess::Write),
+                "read" => Some(RepositoryAccess::Read),
+                _ => None,
+            })
+            .max()
+    }
+}
+
 /// Fetches a Bitbucket Cloud paginated collection, following `next` links until
 /// `max_items` are collected or the pages run out.
 pub(super) async fn bitbucket_get_paginated<T: DeserializeOwned>(
@@ -856,6 +899,55 @@ mod tests {
 
     use super::*;
     use http_client::FakeHttpClient;
+
+    #[test]
+    fn test_repository_permissions_take_the_strongest_entry() {
+        let access = |json: &str| {
+            serde_json::from_str::<BitbucketRepositoryPermissions>(json)
+                .unwrap()
+                .access()
+        };
+        assert_eq!(
+            access(r#"{"values":[{"permission":"read"},{"permission":"admin"}]}"#),
+            Some(RepositoryAccess::Write)
+        );
+        assert_eq!(
+            access(r#"{"values":[{"permission":"read"}]}"#),
+            Some(RepositoryAccess::Read)
+        );
+        assert_eq!(access(r#"{"values":[]}"#), None);
+    }
+
+    #[test]
+    fn test_repository_access_falls_back_to_visibility() {
+        // The permissions endpoint lists nothing (a public repository), and the
+        // repository itself loads, so the account can read it.
+        let client: Arc<dyn HttpClient> = FakeHttpClient::create(|request| async move {
+            let body = if request.uri().path().contains("/user/permissions/") {
+                r#"{"values":[]}"#
+            } else {
+                r#"{"mainbranch":{"name":"main"}}"#
+            };
+            Ok(http_client::Response::builder()
+                .status(200)
+                .body(body.into())
+                .unwrap())
+        });
+        let remote = ParsedGitRemote {
+            owner: "acme".into(),
+            repo: "widgets".into(),
+        };
+        let access = futures::executor::block_on(Bitbucket::public_instance().repository_access(
+            &remote,
+            Some(GitHostAuth::Basic {
+                username: "user".into(),
+                secret: "secret".into(),
+            }),
+            client,
+        ))
+        .unwrap();
+        assert_eq!(access, Some(RepositoryAccess::Read));
+    }
 
     #[test]
     fn test_bitbucket_send_maps_401_to_auth_error() {

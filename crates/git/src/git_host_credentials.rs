@@ -3,13 +3,19 @@ use std::{path::PathBuf, sync::Arc};
 use anyhow::{Context as _, Result};
 use collections::HashMap;
 use credentials_provider::CredentialsProvider;
+use futures::{FutureExt as _, future::Shared};
 use gpui::{
     App, AppContext as _, AsyncApp, BorrowAppContext as _, Context, EntityId, Global, Subscription,
+    Task,
 };
+use http_client::HttpClient;
 use serde::{Deserialize, Serialize};
 use util::ResultExt as _;
 
-use crate::hosting_provider::{GitHostAuth, GitHostAuthKind, GitHostingProviderRegistry};
+use crate::hosting_provider::{
+    GitHostAuth, GitHostAuthKind, GitHostingProvider, GitHostingProviderRegistry, ParsedGitRemote,
+    RepositoryAccess,
+};
 
 /// A specific git host Lathe can authenticate against for pull-request
 /// operations: the protocol it speaks plus the hostname it lives at.
@@ -159,6 +165,38 @@ impl HostAccounts {
             .and_then(|id| self.find(id))
             .or_else(|| self.accounts.first())
     }
+
+    /// The account with the most access to a repository. Among equally capable
+    /// accounts the workspace's own pick wins, then the host default, so a
+    /// manual choice still applies wherever it works. `None` when no account's
+    /// access is known or none can use the repository, leaving the choice to
+    /// [`active_account`].
+    fn most_capable_account(
+        &self,
+        access: &HashMap<String, RepositoryAccess>,
+        workspace_pick: Option<&str>,
+    ) -> Option<&GitHostAccount> {
+        let best = self
+            .accounts
+            .iter()
+            .filter_map(|account| access.get(&account.id))
+            .max()
+            .copied()?;
+        if best == RepositoryAccess::None {
+            return None;
+        }
+        let is_best = |account: &&GitHostAccount| access.get(&account.id) == Some(&best);
+        workspace_pick
+            .and_then(|id| self.find(id))
+            .filter(is_best)
+            .or_else(|| {
+                self.default
+                    .as_deref()
+                    .and_then(|id| self.find(id))
+                    .filter(is_best)
+            })
+            .or_else(|| self.accounts.iter().find(is_best))
+    }
 }
 
 /// Which accounts each host has. Shared by every window and every running
@@ -192,6 +230,25 @@ fn save_index(index: &AccountIndex) -> Result<()> {
     }
     paths::write_account_index(&path, &serde_json::to_vec_pretty(index)?)
         .with_context(|| format!("writing {}", path.display()))
+}
+
+/// What each connected account can do in one repository, keyed by account id.
+/// `None` when no account's access could be determined.
+type AccountAccess = Option<HashMap<String, RepositoryAccess>>;
+
+/// Detected [`AccountAccess`] per `(host, "owner/repo")`, for this session only
+/// since membership changes on the host. Cleared whenever the connected
+/// accounts change.
+#[derive(Default)]
+struct RepositoryAccessCache(HashMap<(String, String), Shared<Task<AccountAccess>>>);
+
+impl Global for RepositoryAccessCache {}
+
+fn repository_key(host: &str, remote: &ParsedGitRemote) -> (String, String) {
+    (
+        host.to_string(),
+        format!("{}/{}", remote.owner, remote.repo),
+    )
 }
 
 struct GlobalGitHostCredentials(Arc<dyn CredentialsProvider>);
@@ -250,6 +307,26 @@ impl WorkspaceGitHostAccounts {
     }
 }
 
+/// Which workspace each project belongs to, so code that only has the project
+/// (an agent being spawned) can use that workspace's account picks.
+#[derive(Default)]
+struct ProjectWorkspaces(HashMap<EntityId, EntityId>);
+
+impl Global for ProjectWorkspaces {}
+
+pub fn register_project_workspace(project: EntityId, workspace: EntityId, cx: &mut App) {
+    cx.default_global::<ProjectWorkspaces>()
+        .0
+        .insert(project, workspace);
+}
+
+pub fn workspace_for_project(project: EntityId, cx: &App) -> Option<EntityId> {
+    cx.try_global::<ProjectWorkspaces>()?
+        .0
+        .get(&project)
+        .copied()
+}
+
 /// Installs the credentials provider used for git-host secrets and kicks off an
 /// initial refresh of the connection snapshot. Call once at startup.
 pub fn init(provider: Arc<dyn CredentialsProvider>, cx: &mut App) {
@@ -284,17 +361,114 @@ pub fn accounts(cx: &App, host: &str) -> Vec<GitHostAccount> {
 /// connected.
 pub fn active_account(cx: &App, workspace: Option<EntityId>, host: &str) -> Option<GitHostAccount> {
     let host_accounts = cx.try_global::<GitHostConnections>()?.0.hosts.get(host)?;
-    workspace
-        .and_then(|workspace| {
-            let bound_id = cx
-                .try_global::<WorkspaceGitHostAccounts>()?
-                .0
-                .get(&workspace)?
-                .get(host)?;
-            host_accounts.find(bound_id)
-        })
+    workspace_pick(cx, workspace, host)
+        .and_then(|bound_id| host_accounts.find(bound_id))
         .or_else(|| host_accounts.default_account())
         .cloned()
+}
+
+fn workspace_pick<'a>(cx: &'a App, workspace: Option<EntityId>, host: &str) -> Option<&'a str> {
+    cx.try_global::<WorkspaceGitHostAccounts>()?
+        .0
+        .get(&workspace?)?
+        .get(host)
+        .map(String::as_str)
+}
+
+/// The account `workspace` uses for one repository on `host`: whichever
+/// connected account can do the most there, once detected, otherwise the
+/// workspace's account for the host. Synchronous, for rendering; detection is
+/// started by [`auth_for_repository`].
+pub fn account_for_repository(
+    cx: &App,
+    workspace: Option<EntityId>,
+    host: &str,
+    remote: &ParsedGitRemote,
+) -> Option<GitHostAccount> {
+    let detected = cx
+        .try_global::<RepositoryAccessCache>()
+        .and_then(|cache| cache.0.get(&repository_key(host, remote)))
+        .and_then(|detection| detection.peek())
+        .and_then(Option::as_ref);
+    if let Some(access) = detected
+        && let Some(host_accounts) = cx
+            .try_global::<GitHostConnections>()
+            .and_then(|connections| connections.0.hosts.get(host))
+        && let Some(account) =
+            host_accounts.most_capable_account(access, workspace_pick(cx, workspace, host))
+    {
+        return Some(account.clone());
+    }
+    active_account(cx, workspace, host)
+}
+
+/// Asks the host what each connected account can do in the repository, once
+/// per session. Returns `None` when there is nothing to choose between.
+fn detect_repository_access(
+    cx: &mut App,
+    provider: Arc<dyn GitHostingProvider + Send + Sync>,
+    remote: &ParsedGitRemote,
+    http_client: Arc<dyn HttpClient>,
+) -> Option<Shared<Task<AccountAccess>>> {
+    let host = provider.base_url().host_str()?.to_string();
+    let git_host = GitHost::resolve(cx, &host)?;
+    let host_accounts = accounts(cx, &host);
+    if host_accounts.len() < 2 {
+        return None;
+    }
+    let key = repository_key(&host, remote);
+    if let Some(detection) = cx
+        .try_global::<RepositoryAccessCache>()
+        .and_then(|cache| cache.0.get(&key))
+        // A detection that learned nothing (e.g. it ran offline) is retried.
+        .filter(|detection| !matches!(detection.peek(), Some(None)))
+    {
+        return Some(detection.clone());
+    }
+
+    let remote = ParsedGitRemote {
+        owner: remote.owner.clone(),
+        repo: remote.repo.clone(),
+    };
+    let detection = cx
+        .spawn(async move |cx| {
+            let cx = &*cx;
+            let checks = host_accounts.into_iter().map(|account| {
+                let host = &host;
+                let git_host = &git_host;
+                let provider = &provider;
+                let remote = &remote;
+                let http_client = http_client.clone();
+                async move {
+                    let (username, secret) =
+                        read_credential(cx, &account_credential_url(host, &account.id))
+                            .await
+                            .log_err()
+                            .flatten()?;
+                    let access = provider
+                        .repository_access(
+                            remote,
+                            Some(git_host.auth(username, secret)),
+                            http_client,
+                        )
+                        .await
+                        .log_err()
+                        .flatten()?;
+                    Some((account.id, access))
+                }
+            });
+            let access: HashMap<String, RepositoryAccess> = futures::future::join_all(checks)
+                .await
+                .into_iter()
+                .flatten()
+                .collect();
+            (!access.is_empty()).then_some(access)
+        })
+        .shared();
+    cx.default_global::<RepositoryAccessCache>()
+        .0
+        .insert(key, detection.clone());
+    Some(detection)
 }
 
 /// The login of the account `workspace` uses for `host`, for synchronous use
@@ -324,6 +498,94 @@ pub async fn auth_for_host(
             .await?
             .map(|(username, secret)| git_host.auth(username, secret)),
     )
+}
+
+/// Reads the credential of the account `workspace` uses for one repository,
+/// first detecting which connected account can do the most there when the host
+/// has several. Requests scoped to a repository should use this rather than
+/// [`auth_for_host`], so each repository gets the account that can use it.
+pub async fn auth_for_repository(
+    cx: &AsyncApp,
+    workspace: Option<EntityId>,
+    provider: Arc<dyn GitHostingProvider + Send + Sync>,
+    remote: &ParsedGitRemote,
+    http_client: Arc<dyn HttpClient>,
+) -> Result<Option<GitHostAuth>> {
+    let Some(host) = provider.base_url().host_str().map(str::to_string) else {
+        return Ok(None);
+    };
+    let Some(git_host) = GitHost::resolve_async(cx, &host) else {
+        return Ok(None);
+    };
+    let detection = cx.update(|cx| detect_repository_access(cx, provider, remote, http_client));
+    if let Some(detection) = detection {
+        detection.await;
+    }
+    let Some(account) = cx.update(|cx| account_for_repository(cx, workspace, &host, remote)) else {
+        return Ok(None);
+    };
+    Ok(
+        read_credential(cx, &account_credential_url(&host, &account.id))
+            .await?
+            .map(|(username, secret)| git_host.auth(username, secret)),
+    )
+}
+
+/// The environment variable a host's command-line tool reads its token from:
+/// `gh` for GitHub and GitHub Enterprise, `glab` for GitLab. `None` for
+/// Bitbucket, which has no standard tool that takes a token this way.
+fn cli_token_variable(git_host: &GitHost) -> Option<&'static str> {
+    match git_host.kind() {
+        // `gh` sends GH_TOKEN to github.com and GHE.com's `*.ghe.com` tenants,
+        // and GH_ENTERPRISE_TOKEN to every Enterprise Server host.
+        GitHostAuthKind::GitHub
+            if git_host.is_public_instance() || git_host.host().ends_with(".ghe.com") =>
+        {
+            Some("GH_TOKEN")
+        }
+        GitHostAuthKind::GitHub => Some("GH_ENTERPRISE_TOKEN"),
+        GitHostAuthKind::GitLab => Some("GITLAB_TOKEN"),
+        GitHostAuthKind::Bitbucket => None,
+    }
+}
+
+/// The variables that make `gh` and `glab` act as the account the pull-request
+/// panel uses for each repository, so an agent working on a pull request from
+/// its own shell does so as the same account. Repositories come in priority
+/// order: each variable holds one token, so when two repositories need the same
+/// variable the earlier one keeps it.
+pub async fn cli_env_for_repositories(
+    cx: &AsyncApp,
+    workspace: Option<EntityId>,
+    repositories: Vec<(Arc<dyn GitHostingProvider + Send + Sync>, ParsedGitRemote)>,
+    http_client: Arc<dyn HttpClient>,
+) -> HashMap<String, String> {
+    let mut env = HashMap::default();
+    for (provider, remote) in repositories {
+        let Some(host) = provider.base_url().host_str().map(str::to_string) else {
+            continue;
+        };
+        let Some(variable) =
+            GitHost::resolve_async(cx, &host).and_then(|git_host| cli_token_variable(&git_host))
+        else {
+            continue;
+        };
+        if env.contains_key(variable) {
+            continue;
+        }
+        match auth_for_repository(cx, workspace, provider, &remote, http_client.clone()).await {
+            // `gh` and `glab` only take a bare token; a Basic credential has no
+            // equivalent variable.
+            Ok(Some(GitHostAuth::Bearer(token))) => {
+                env.insert(variable.to_string(), token);
+            }
+            Ok(_) => {}
+            Err(error) => {
+                log::warn!("git host accounts: no credential for {host}: {error:#}");
+            }
+        }
+    }
+    env
 }
 
 /// Stores a credential as an account on `host`, makes it the host's default,
@@ -438,6 +700,8 @@ pub fn refresh_connections(cx: &mut App) {
         }
         cx.update(|cx| {
             cx.set_global(GitHostConnections(index));
+            // Which account suits a repository depends on the accounts there are.
+            cx.set_global(RepositoryAccessCache::default());
             cx.refresh_windows();
         })
     })
@@ -519,5 +783,298 @@ mod tests {
             assert_eq!(active(second, cx).as_deref(), Some("work"));
             assert!(active_account(cx, Some(first), "gitlab.com").is_none());
         });
+    }
+
+    #[gpui::test]
+    fn cli_token_variable_matches_what_each_tool_reads(cx: &mut gpui::TestAppContext) {
+        let host = |kind, host: &str| GitHost {
+            kind,
+            host: host.into(),
+            display_name: host.into(),
+        };
+        cx.update(|_| {
+            let variable = |git_host: GitHost| cli_token_variable(&git_host);
+            assert_eq!(
+                variable(host(GitHostAuthKind::GitHub, "github.com")),
+                Some("GH_TOKEN")
+            );
+            assert_eq!(
+                variable(host(GitHostAuthKind::GitHub, "acme.ghe.com")),
+                Some("GH_TOKEN")
+            );
+            assert_eq!(
+                variable(host(GitHostAuthKind::GitHub, "git.corp.example")),
+                Some("GH_ENTERPRISE_TOKEN")
+            );
+            assert_eq!(
+                variable(host(GitHostAuthKind::GitLab, "gitlab.example")),
+                Some("GITLAB_TOKEN")
+            );
+            assert_eq!(
+                variable(host(GitHostAuthKind::Bitbucket, "bitbucket.org")),
+                None
+            );
+        });
+    }
+
+    struct FakeProvider {
+        kind: GitHostAuthKind,
+        host: &'static str,
+        /// What each token can do, by `owner/repo`.
+        access: HashMap<(&'static str, &'static str), RepositoryAccess>,
+    }
+
+    #[async_trait::async_trait]
+    impl GitHostingProvider for FakeProvider {
+        fn name(&self) -> String {
+            self.host.to_string()
+        }
+
+        fn base_url(&self) -> url::Url {
+            url::Url::parse(&format!("https://{}", self.host)).unwrap()
+        }
+
+        fn build_commit_permalink(
+            &self,
+            _remote: &ParsedGitRemote,
+            _params: crate::BuildCommitPermalinkParams,
+        ) -> url::Url {
+            self.base_url()
+        }
+
+        fn build_permalink(
+            &self,
+            _remote: ParsedGitRemote,
+            _params: crate::BuildPermalinkParams,
+        ) -> url::Url {
+            self.base_url()
+        }
+
+        fn supports_avatars(&self) -> bool {
+            false
+        }
+
+        fn format_line_number(&self, line: u32) -> String {
+            line.to_string()
+        }
+
+        fn format_line_numbers(&self, start_line: u32, end_line: u32) -> String {
+            format!("{start_line}-{end_line}")
+        }
+
+        fn parse_remote_url(&self, _url: &str) -> Option<ParsedGitRemote> {
+            None
+        }
+
+        fn auth_kind(&self) -> Option<GitHostAuthKind> {
+            Some(self.kind)
+        }
+
+        async fn repository_access(
+            &self,
+            remote: &ParsedGitRemote,
+            auth: Option<GitHostAuth>,
+            _http_client: Arc<dyn HttpClient>,
+        ) -> Result<Option<RepositoryAccess>> {
+            let Some(GitHostAuth::Bearer(token)) = auth else {
+                return Ok(Some(RepositoryAccess::None));
+            };
+            let repository = format!("{}/{}", remote.owner, remote.repo);
+            Ok(Some(
+                self.access
+                    .iter()
+                    .find(|((access_token, access_repository), _)| {
+                        *access_token == token && *access_repository == repository
+                    })
+                    .map_or(RepositoryAccess::None, |(_, access)| *access),
+            ))
+        }
+    }
+
+    /// Serves `(username, token)` for each account's keychain url.
+    struct FakeCredentials(HashMap<String, (String, String)>);
+
+    impl CredentialsProvider for FakeCredentials {
+        fn read_credentials<'a>(
+            &'a self,
+            url: &'a str,
+            _cx: &'a AsyncApp,
+        ) -> std::pin::Pin<Box<dyn Future<Output = Result<Option<(String, Vec<u8>)>>> + 'a>>
+        {
+            let credential = self
+                .0
+                .get(url)
+                .map(|(username, token)| (username.clone(), token.clone().into_bytes()));
+            Box::pin(async move { Ok(credential) })
+        }
+
+        fn write_credentials<'a>(
+            &'a self,
+            _url: &'a str,
+            _username: &'a str,
+            _password: &'a [u8],
+            _cx: &'a AsyncApp,
+        ) -> std::pin::Pin<Box<dyn Future<Output = Result<()>> + 'a>> {
+            Box::pin(async { Ok(()) })
+        }
+
+        fn delete_credentials<'a>(
+            &'a self,
+            _url: &'a str,
+            _cx: &'a AsyncApp,
+        ) -> std::pin::Pin<Box<dyn Future<Output = Result<()>> + 'a>> {
+            Box::pin(async { Ok(()) })
+        }
+    }
+
+    #[gpui::test]
+    async fn agent_env_uses_each_repositorys_account(cx: &mut gpui::TestAppContext) {
+        let github: Arc<dyn GitHostingProvider + Send + Sync> = Arc::new(FakeProvider {
+            kind: GitHostAuthKind::GitHub,
+            host: "github.com",
+            access: HashMap::from_iter([
+                (("work-token", "acme/private"), RepositoryAccess::Write),
+                (("personal-token", "me/dotfiles"), RepositoryAccess::Write),
+            ]),
+        });
+        let enterprise: Arc<dyn GitHostingProvider + Send + Sync> = Arc::new(FakeProvider {
+            kind: GitHostAuthKind::GitHub,
+            host: "git.corp.example",
+            access: HashMap::default(),
+        });
+        let bitbucket: Arc<dyn GitHostingProvider + Send + Sync> = Arc::new(FakeProvider {
+            kind: GitHostAuthKind::Bitbucket,
+            host: "bitbucket.org",
+            access: HashMap::default(),
+        });
+
+        cx.update(|cx| {
+            let registry = GitHostingProviderRegistry::new();
+            for provider in [&github, &enterprise, &bitbucket] {
+                registry.register_hosting_provider(provider.clone());
+            }
+            GitHostingProviderRegistry::set_global(Arc::new(registry), cx);
+
+            let credential = |host: &str, id: &str, token: &str| {
+                (
+                    account_credential_url(host, id),
+                    (format!("user-{id}"), token.to_string()),
+                )
+            };
+            cx.set_global(GlobalGitHostCredentials(Arc::new(FakeCredentials(
+                HashMap::from_iter([
+                    credential("github.com", "work", "work-token"),
+                    credential("github.com", "personal", "personal-token"),
+                    credential("git.corp.example", "corp", "corp-token"),
+                    credential("bitbucket.org", "bb", "bb-secret"),
+                ]),
+            ))));
+
+            let mut index = AccountIndex::default();
+            index.hosts.insert(
+                "github.com".to_string(),
+                HostAccounts {
+                    accounts: vec![account("work"), account("personal")],
+                    default: Some("personal".to_string()),
+                },
+            );
+            for (host, id) in [("git.corp.example", "corp"), ("bitbucket.org", "bb")] {
+                index.hosts.insert(
+                    host.to_string(),
+                    HostAccounts {
+                        accounts: vec![account(id)],
+                        default: Some(id.to_string()),
+                    },
+                );
+            }
+            cx.set_global(GitHostConnections(index));
+        });
+
+        let remote = |owner: &str, repo: &str| ParsedGitRemote {
+            owner: owner.into(),
+            repo: repo.into(),
+        };
+        let repositories = vec![
+            // The active repository: only the work account can see it, so it
+            // decides GH_TOKEN even though personal is the host default.
+            (github.clone(), remote("acme", "private")),
+            (github.clone(), remote("me", "dotfiles")),
+            (enterprise.clone(), remote("platform", "service")),
+            (bitbucket.clone(), remote("team", "app")),
+        ];
+        let env = cx
+            .update(|cx| {
+                cx.spawn(async move |cx| {
+                    cli_env_for_repositories(
+                        cx,
+                        None,
+                        repositories,
+                        Arc::new(http_client::BlockedHttpClient::new()),
+                    )
+                    .await
+                })
+            })
+            .await;
+
+        assert_eq!(
+            env,
+            HashMap::from_iter([
+                ("GH_TOKEN".to_string(), "work-token".to_string()),
+                ("GH_ENTERPRISE_TOKEN".to_string(), "corp-token".to_string()),
+            ])
+        );
+    }
+
+    #[test]
+    fn repository_uses_the_most_capable_account() {
+        let host_accounts = HostAccounts {
+            accounts: vec![account("work"), account("personal"), account("other")],
+            default: Some("personal".to_string()),
+        };
+        let access = |pairs: &[(&str, RepositoryAccess)]| -> HashMap<String, RepositoryAccess> {
+            pairs
+                .iter()
+                .map(|(id, access)| (id.to_string(), *access))
+                .collect()
+        };
+        let pick = |access: &HashMap<String, RepositoryAccess>, workspace_pick: Option<&str>| {
+            host_accounts
+                .most_capable_account(access, workspace_pick)
+                .map(|account| account.id.clone())
+        };
+
+        // A private org repository only the work account can see wins over
+        // both the host default and the workspace's own pick.
+        let org_repository = access(&[
+            ("work", RepositoryAccess::Write),
+            ("personal", RepositoryAccess::None),
+            ("other", RepositoryAccess::None),
+        ]);
+        assert_eq!(pick(&org_repository, None).as_deref(), Some("work"));
+        assert_eq!(
+            pick(&org_repository, Some("personal")).as_deref(),
+            Some("work")
+        );
+
+        // Pushing beats only reading.
+        let fork = access(&[
+            ("work", RepositoryAccess::Read),
+            ("personal", RepositoryAccess::Write),
+        ]);
+        assert_eq!(pick(&fork, Some("work")).as_deref(), Some("personal"));
+
+        // Equal access defers to the workspace pick, then the host default.
+        let public = access(&[
+            ("work", RepositoryAccess::Read),
+            ("personal", RepositoryAccess::Read),
+            ("other", RepositoryAccess::Read),
+        ]);
+        assert_eq!(pick(&public, Some("other")).as_deref(), Some("other"));
+        assert_eq!(pick(&public, None).as_deref(), Some("personal"));
+
+        // Nothing usable, or nothing known, leaves the choice to the workspace.
+        let unreachable = access(&[("work", RepositoryAccess::None)]);
+        assert_eq!(pick(&unreachable, None), None);
+        assert_eq!(pick(&HashMap::default(), None), None);
     }
 }

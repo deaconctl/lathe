@@ -24,7 +24,7 @@ use ai_accounts::{
 };
 use anyhow::anyhow;
 use async_channel;
-use collections::HashMap;
+use collections::{HashMap, HashSet};
 use futures::channel::mpsc;
 use futures::future::Shared;
 use futures::{Future, FutureExt as _};
@@ -35,8 +35,10 @@ use project::{AgentId, Project};
 use serde::Deserialize;
 use settings::{AgentConfigOptionValue, SettingsStore};
 use std::path::PathBuf;
+use std::pin::pin;
 use std::rc::Rc;
 use std::sync::Arc;
+use std::time::Duration;
 use std::{any::Any, cell::RefCell};
 use task::SpawnInTerminal;
 use util::ResultExt as _;
@@ -528,6 +530,9 @@ impl AcpConnection {
         } else {
             &[]
         };
+        if is_local_project {
+            apply_git_host_env(&agent_id, &project, command.env.get_or_insert_default(), cx).await;
+        }
         let spawn_env = command.env.clone().unwrap_or_default();
         let original_command = command.clone();
         let transport::StdioProcess {
@@ -1824,6 +1829,100 @@ fn apply_ai_account_env(
             .or_insert_with(|| value.to_string());
     }
     scrub_env
+}
+
+/// How long agent startup waits to learn which git host account each
+/// repository uses, which can mean asking the host.
+const GIT_HOST_ENV_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Gives the agent the token of the account the pull-request panel uses for the
+/// project's repositories, in the variables `gh` and `glab` read, so pull
+/// request work the agent does from its own shell acts as that account. The
+/// active repository comes first, since a variable holds only one token.
+///
+/// This replaces any token inherited from the shell, which reflects whatever
+/// account the machine happens to be logged into. A variable set in the
+/// agent's own settings is kept, as an explicit choice.
+async fn apply_git_host_env(
+    agent_id: &AgentId,
+    project: &Entity<Project>,
+    env: &mut HashMap<String, String>,
+    cx: &mut AsyncApp,
+) {
+    let (repositories, workspace, http_client, configured) = cx.update(|cx| {
+        let mut repositories = Vec::new();
+        if let Some(registry) = git::GitHostingProviderRegistry::try_global(cx) {
+            let git_store = project.read(cx).git_store().read(cx);
+            let active = git_store.active_repository();
+            let others = git_store
+                .repositories()
+                .values()
+                .filter(|repository| Some(*repository) != active.as_ref())
+                .cloned();
+            for repository in active.clone().into_iter().chain(others) {
+                let snapshot = repository.read(cx).snapshot();
+                for url in [snapshot.remote_origin_url, snapshot.remote_upstream_url]
+                    .into_iter()
+                    .flatten()
+                {
+                    repositories.extend(git::parse_git_remote_url(registry.clone(), &url));
+                }
+            }
+        }
+        (
+            repositories,
+            git::git_host_credentials::workspace_for_project(project.entity_id(), cx),
+            cx.http_client(),
+            agent_settings_env_keys(agent_id, cx),
+        )
+    });
+    if repositories.is_empty() {
+        return;
+    }
+
+    let lookup = git::git_host_credentials::cli_env_for_repositories(
+        cx,
+        workspace,
+        repositories,
+        http_client,
+    );
+    let timeout = cx.background_executor().timer(GIT_HOST_ENV_TIMEOUT);
+    let git_host_env = match futures::future::select(pin!(lookup), timeout).await {
+        futures::future::Either::Left((git_host_env, _)) => git_host_env,
+        futures::future::Either::Right(_) => {
+            log::warn!("git host accounts: timed out choosing accounts for {agent_id}");
+            return;
+        }
+    };
+    let mut applied: Vec<&str> = Vec::new();
+    for (key, value) in &git_host_env {
+        if configured.contains(key) {
+            continue;
+        }
+        env.insert(key.clone(), value.clone());
+        applied.push(key);
+    }
+    if !applied.is_empty() {
+        applied.sort_unstable();
+        log::info!("git host accounts: gave {agent_id} {}", applied.join(", "));
+    }
+}
+
+/// The environment variables set explicitly in the agent's own settings.
+fn agent_settings_env_keys(agent_id: &AgentId, cx: &App) -> HashSet<String> {
+    let Some(settings) = cx.try_global::<SettingsStore>().and_then(|store| {
+        store
+            .get::<AllAgentServersSettings>(None)
+            .get(agent_id.as_ref())
+    }) else {
+        return HashSet::default();
+    };
+    let env = match settings {
+        CustomAgentServerSettings::Custom { command, .. } => command.env.as_ref(),
+        CustomAgentServerSettings::Registry { env, .. } => Some(env),
+    };
+    env.map(|env| env.keys().cloned().collect())
+        .unwrap_or_default()
 }
 
 #[cfg(any(test, feature = "test-support"))]
@@ -5889,8 +5988,13 @@ mod tests {
             )),
         );
 
-        let task = meta_terminal_auth_task(&AgentId::new("test-agent"), &method_id, &method, &HashMap::default())
-            .expect("expected legacy terminal auth task");
+        let task = meta_terminal_auth_task(
+            &AgentId::new("test-agent"),
+            &method_id,
+            &method,
+            &HashMap::default(),
+        )
+        .expect("expected legacy terminal auth task");
 
         assert_eq!(task.id.0, "external-agent-test-agent-legacy-login-login");
         assert_eq!(task.command.as_deref(), Some("legacy-agent"));
@@ -5917,7 +6021,13 @@ mod tests {
         );
 
         assert!(
-            meta_terminal_auth_task(&AgentId::new("test-agent"), &method_id, &method, &HashMap::default()).is_none()
+            meta_terminal_auth_task(
+                &AgentId::new("test-agent"),
+                &method_id,
+                &method,
+                &HashMap::default()
+            )
+            .is_none()
         );
     }
 

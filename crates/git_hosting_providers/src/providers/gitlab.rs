@@ -16,7 +16,8 @@ use git::{
     GitHostAuthKind, GitHostingProvider, NewPullRequest, ParsedGitRemote, PullRequest,
     PullRequestAuthError, PullRequestChecks, PullRequestDetail, PullRequestListFilter,
     PullRequestMergeMethod, PullRequestReviewComment, PullRequestReviewVerdict,
-    PullRequestReviewer, PullRequestState, PullRequestSummary, RemoteUrl, ReviewerCandidate,
+    PullRequestReviewer, PullRequestState, PullRequestSummary, RemoteUrl, RepositoryAccess,
+    ReviewerCandidate,
 };
 
 fn merge_request_number_regex() -> &'static Regex {
@@ -335,6 +336,37 @@ impl GitHostingProvider for Gitlab {
         let project: GitlabProject =
             serde_json::from_slice(&bytes).context("parsing GitLab project")?;
         Ok(project.default_branch.map(SharedString::from))
+    }
+
+    async fn repository_access(
+        &self,
+        remote: &ParsedGitRemote,
+        auth: Option<GitHostAuth>,
+        http_client: Arc<dyn HttpClient>,
+    ) -> Result<Option<RepositoryAccess>> {
+        let api = self.api_base()?;
+        let project = gitlab_project_id(remote);
+        let url = format!("{api}/projects/{project}");
+        let request = gitlab_request(GitlabMethod::Get, &url, &auth, None)?;
+        let mut response = http_client
+            .send(request)
+            .await
+            .context("error while checking GitLab project access")?;
+        // GitLab answers 404 for a private project the account cannot see.
+        if matches!(response.status().as_u16(), 401 | 403 | 404) {
+            return Ok(Some(RepositoryAccess::None));
+        }
+        let mut bytes = Vec::new();
+        response.body_mut().read_to_end(&mut bytes).await?;
+        if !response.status().is_success() {
+            bail!(
+                "checking GitLab project access failed ({})",
+                response.status().as_u16()
+            );
+        }
+        let project: GitlabProjectPermissions =
+            serde_json::from_slice(&bytes).context("parsing GitLab project")?;
+        Ok(Some(project.access()))
     }
 
     async fn get_pull_request(

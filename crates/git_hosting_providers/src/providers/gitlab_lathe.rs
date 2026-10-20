@@ -663,11 +663,77 @@ pub(super) struct GitlabProject {
     pub(super) default_branch: Option<String>,
 }
 
+#[derive(Deserialize)]
+pub(super) struct GitlabProjectPermissions {
+    #[serde(default)]
+    permissions: Option<GitlabPermissions>,
+}
+
+#[derive(Deserialize)]
+struct GitlabPermissions {
+    #[serde(default)]
+    project_access: Option<GitlabAccessLevel>,
+    #[serde(default)]
+    group_access: Option<GitlabAccessLevel>,
+}
+
+#[derive(Deserialize)]
+struct GitlabAccessLevel {
+    access_level: u32,
+}
+
+/// GitLab's Developer role, the lowest that can push.
+const GITLAB_DEVELOPER_ACCESS_LEVEL: u32 = 30;
+
+impl GitlabProjectPermissions {
+    /// A project that loaded at all is at least readable; membership through the
+    /// project or its group decides whether the account can push.
+    pub(super) fn access(&self) -> RepositoryAccess {
+        let level = self
+            .permissions
+            .as_ref()
+            .map(|permissions| {
+                [&permissions.project_access, &permissions.group_access]
+                    .into_iter()
+                    .flatten()
+                    .map(|access| access.access_level)
+                    .max()
+                    .unwrap_or(0)
+            })
+            .unwrap_or(0);
+        if level >= GITLAB_DEVELOPER_ACCESS_LEVEL {
+            RepositoryAccess::Write
+        } else {
+            RepositoryAccess::Read
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use pretty_assertions::assert_eq;
 
     use super::*;
+
+    #[test]
+    fn test_project_access_uses_the_higher_of_project_and_group_membership() {
+        let access = |json: &str| {
+            serde_json::from_str::<GitlabProjectPermissions>(json)
+                .unwrap()
+                .access()
+        };
+        assert_eq!(
+            access(
+                r#"{"permissions":{"project_access":{"access_level":20},"group_access":{"access_level":40}}}"#
+            ),
+            RepositoryAccess::Write
+        );
+        assert_eq!(
+            access(r#"{"permissions":{"project_access":{"access_level":20},"group_access":null}}"#),
+            RepositoryAccess::Read
+        );
+        assert_eq!(access(r#"{"permissions":null}"#), RepositoryAccess::Read);
+    }
 
     #[test]
     fn test_api_base_uses_api_v4_on_gitlab_dot_com() {

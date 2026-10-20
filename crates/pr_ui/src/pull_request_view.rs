@@ -215,7 +215,6 @@ impl PullRequestView {
             PullRequestReviewVerdict::Comment => "Posted review comment".into(),
         };
         let provider = self.provider.clone();
-        let host = provider.base_url().host_str().map(|host| host.to_string());
         let remote = clone_remote(&self.remote);
         let number = self.number;
         let http_client = cx.http_client();
@@ -224,15 +223,16 @@ impl PullRequestView {
         cx.notify();
         let workspace_id = self.workspace.entity_id();
         let task = cx.spawn(async move |this, cx| {
-            let auth = match host.as_deref() {
-                Some(host) => {
-                    git::git_host_credentials::auth_for_host(cx, Some(workspace_id), host)
-                        .await
-                        .ok()
-                        .flatten()
-                }
-                None => None,
-            };
+            let auth = git::git_host_credentials::auth_for_repository(
+                cx,
+                Some(workspace_id),
+                provider.clone(),
+                &remote,
+                http_client.clone(),
+            )
+            .await
+            .ok()
+            .flatten();
             let result = provider
                 .submit_review(&remote, number, verdict, None, auth, http_client)
                 .await;
@@ -265,7 +265,6 @@ impl PullRequestView {
             PullRequestReviewVerdict::Comment => "Removed review".into(),
         };
         let provider = self.provider.clone();
-        let host = provider.base_url().host_str().map(|host| host.to_string());
         let remote = clone_remote(&self.remote);
         let number = self.number;
         let http_client = cx.http_client();
@@ -274,15 +273,16 @@ impl PullRequestView {
         cx.notify();
         let workspace_id = self.workspace.entity_id();
         let task = cx.spawn(async move |this, cx| {
-            let auth = match host.as_deref() {
-                Some(host) => {
-                    git::git_host_credentials::auth_for_host(cx, Some(workspace_id), host)
-                        .await
-                        .ok()
-                        .flatten()
-                }
-                None => None,
-            };
+            let auth = git::git_host_credentials::auth_for_repository(
+                cx,
+                Some(workspace_id),
+                provider.clone(),
+                &remote,
+                http_client.clone(),
+            )
+            .await
+            .ok()
+            .flatten();
             let result = provider
                 .remove_review(&remote, number, verdict, auth, http_client)
                 .await;
@@ -398,7 +398,6 @@ impl PullRequestView {
             return;
         }
         let provider = self.provider.clone();
-        let host = provider.base_url().host_str().map(|host| host.to_string());
         let remote = clone_remote(&self.remote);
         let number = self.number;
         let http_client = cx.http_client();
@@ -407,15 +406,16 @@ impl PullRequestView {
         cx.notify();
         let workspace_id = self.workspace.entity_id();
         let task = cx.spawn(async move |this, cx| {
-            let auth = match host.as_deref() {
-                Some(host) => {
-                    git::git_host_credentials::auth_for_host(cx, Some(workspace_id), host)
-                        .await
-                        .ok()
-                        .flatten()
-                }
-                None => None,
-            };
+            let auth = git::git_host_credentials::auth_for_repository(
+                cx,
+                Some(workspace_id),
+                provider.clone(),
+                &remote,
+                http_client.clone(),
+            )
+            .await
+            .ok()
+            .flatten();
             let result = call(provider, remote, number, auth, http_client).await;
             this.update(cx, |this, cx| {
                 this.in_flight_action = false;
@@ -447,7 +447,6 @@ impl PullRequestView {
             PullRequestMergeMethod::Rebase => "rebase",
         };
         let provider = self.provider.clone();
-        let host = provider.base_url().host_str().map(|host| host.to_string());
         let remote = clone_remote(&self.remote);
         let number = self.number;
         let http_client = cx.http_client();
@@ -456,15 +455,16 @@ impl PullRequestView {
         cx.notify();
         let workspace_id = self.workspace.entity_id();
         let task = cx.spawn(async move |this, cx| {
-            let auth = match host.as_deref() {
-                Some(host) => {
-                    git::git_host_credentials::auth_for_host(cx, Some(workspace_id), host)
-                        .await
-                        .ok()
-                        .flatten()
-                }
-                None => None,
-            };
+            let auth = git::git_host_credentials::auth_for_repository(
+                cx,
+                Some(workspace_id),
+                provider.clone(),
+                &remote,
+                http_client.clone(),
+            )
+            .await
+            .ok()
+            .flatten();
             let result = provider
                 .merge_pull_request(&remote, number, method, auth, http_client)
                 .await;
@@ -538,7 +538,6 @@ impl PullRequestView {
             return;
         }
         let provider = self.provider.clone();
-        let host = provider.base_url().host_str().map(|host| host.to_string());
         let remote = clone_remote(&self.remote);
         let number = self.number;
         let http_client = cx.http_client();
@@ -547,15 +546,16 @@ impl PullRequestView {
         cx.notify();
         let workspace_id = self.workspace.entity_id();
         let task = cx.spawn(async move |this, cx| {
-            let auth = match host.as_deref() {
-                Some(host) => {
-                    git::git_host_credentials::auth_for_host(cx, Some(workspace_id), host)
-                        .await
-                        .ok()
-                        .flatten()
-                }
-                None => None,
-            };
+            let auth = git::git_host_credentials::auth_for_repository(
+                cx,
+                Some(workspace_id),
+                provider.clone(),
+                &remote,
+                http_client.clone(),
+            )
+            .await
+            .ok()
+            .flatten();
             let result = provider
                 .post_review_comment(&remote, number, root_id, body.into(), auth, http_client)
                 .await;
@@ -744,7 +744,6 @@ impl PullRequestView {
             .map(|detail| detail.head_sha.clone())
             .unwrap_or_default();
         let provider = self.provider.clone();
-        let host = provider.base_url().host_str().map(|host| host.to_string());
         let remote = clone_remote(&self.remote);
         let number = self.number;
         let http_client = cx.http_client();
@@ -753,15 +752,16 @@ impl PullRequestView {
         cx.notify();
         let workspace_id = self.workspace.entity_id();
         let task = cx.spawn(async move |this, cx| {
-            let auth = match host.as_deref() {
-                Some(host) => {
-                    git::git_host_credentials::auth_for_host(cx, Some(workspace_id), host)
-                        .await
-                        .ok()
-                        .flatten()
-                }
-                None => None,
-            };
+            let auth = git::git_host_credentials::auth_for_repository(
+                cx,
+                Some(workspace_id),
+                provider.clone(),
+                &remote,
+                http_client.clone(),
+            )
+            .await
+            .ok()
+            .flatten();
             let result = provider
                 .create_review_comment(
                     &remote,
@@ -796,7 +796,6 @@ impl PullRequestView {
 
     fn refresh(&mut self, cx: &mut Context<Self>) {
         let provider = self.provider.clone();
-        let host = provider.base_url().host_str().map(|host| host.to_string());
         let remote = clone_remote(&self.remote);
         let number = self.number;
         let http_client = cx.http_client();
@@ -806,15 +805,16 @@ impl PullRequestView {
         cx.notify();
         let workspace_id = self.workspace.entity_id();
         let task = cx.spawn(async move |this, cx| {
-            let auth = match host.as_deref() {
-                Some(host) => {
-                    git::git_host_credentials::auth_for_host(cx, Some(workspace_id), host)
-                        .await
-                        .ok()
-                        .flatten()
-                }
-                None => None,
-            };
+            let auth = git::git_host_credentials::auth_for_repository(
+                cx,
+                Some(workspace_id),
+                provider.clone(),
+                &remote,
+                http_client.clone(),
+            )
+            .await
+            .ok()
+            .flatten();
             let detail_fut =
                 provider.get_pull_request(&remote, number, auth.clone(), http_client.clone());
             let comments_fut = provider.get_pull_request_comments(

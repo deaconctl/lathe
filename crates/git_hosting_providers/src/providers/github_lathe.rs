@@ -766,6 +766,55 @@ mod tests {
     use super::*;
     use http_client::FakeHttpClient;
 
+    fn github_repository_access(status: u16, body: &'static str) -> Option<RepositoryAccess> {
+        let client: Arc<dyn HttpClient> = FakeHttpClient::create(move |_request| async move {
+            Ok(http_client::Response::builder()
+                .status(status)
+                .body(body.into())
+                .unwrap())
+        });
+        let remote = ParsedGitRemote {
+            owner: "acme".into(),
+            repo: "widgets".into(),
+        };
+        futures::executor::block_on(Github::public_instance().repository_access(
+            &remote,
+            Some(GitHostAuth::Bearer("token".into())),
+            client,
+        ))
+        .unwrap()
+    }
+
+    #[test]
+    fn test_repository_access_reads_push_permission() {
+        assert_eq!(
+            github_repository_access(
+                200,
+                r#"{"permissions":{"admin":false,"push":true,"pull":true}}"#
+            ),
+            Some(RepositoryAccess::Write)
+        );
+        assert_eq!(
+            github_repository_access(
+                200,
+                r#"{"permissions":{"admin":false,"push":false,"pull":true}}"#
+            ),
+            Some(RepositoryAccess::Read)
+        );
+    }
+
+    #[test]
+    fn test_repository_access_treats_hidden_private_repository_as_no_access() {
+        assert_eq!(
+            github_repository_access(404, r#"{"message":"Not Found"}"#),
+            Some(RepositoryAccess::None)
+        );
+        assert_eq!(
+            github_repository_access(401, r#"{"message":"Bad credentials"}"#),
+            Some(RepositoryAccess::None)
+        );
+    }
+
     #[test]
     fn test_github_send_maps_401_to_auth_error() {
         let client: Arc<dyn HttpClient> = FakeHttpClient::create(|_request| async move {
@@ -1367,6 +1416,29 @@ struct GithubCommitStatus {
 pub(super) struct GithubRepository {
     #[serde(default)]
     pub(super) default_branch: Option<String>,
+    /// Present only on authenticated requests.
+    #[serde(default)]
+    pub(super) permissions: Option<GithubRepositoryPermissions>,
+}
+
+#[derive(Deserialize)]
+pub(super) struct GithubRepositoryPermissions {
+    #[serde(default)]
+    admin: bool,
+    #[serde(default)]
+    maintain: bool,
+    #[serde(default)]
+    push: bool,
+}
+
+impl GithubRepositoryPermissions {
+    pub(super) fn access(&self) -> RepositoryAccess {
+        if self.admin || self.maintain || self.push {
+            RepositoryAccess::Write
+        } else {
+            RepositoryAccess::Read
+        }
+    }
 }
 
 #[derive(Deserialize)]

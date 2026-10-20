@@ -203,6 +203,19 @@ pub trait GitHostingProvider {
         anyhow::bail!("creating pull requests is not supported by this hosting provider")
     }
 
+    /// What the account behind `auth` can do in the repository, used to pick
+    /// which of several connected accounts serves it. `None` when the host
+    /// cannot report it, in which case the account choice falls back to the
+    /// workspace's pick.
+    async fn repository_access(
+        &self,
+        _remote: &ParsedGitRemote,
+        _auth: Option<GitHostAuth>,
+        _http_client: Arc<dyn HttpClient>,
+    ) -> Result<Option<RepositoryAccess>> {
+        Ok(None)
+    }
+
     /// The repository's default branch, used to prefill the target of a new pull
     /// request. `None` when the host cannot report it, in which case the caller
     /// falls back to its own guess rather than blocking.

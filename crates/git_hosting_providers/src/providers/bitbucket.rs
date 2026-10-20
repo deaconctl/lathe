@@ -20,7 +20,8 @@ use git::{
     GitHostAuthKind, GitHostingProvider, NewPullRequest, ParsedGitRemote, PullRequest,
     PullRequestAuthError, PullRequestChecks, PullRequestDetail, PullRequestListFilter,
     PullRequestMergeMethod, PullRequestReviewComment, PullRequestReviewVerdict,
-    PullRequestReviewer, PullRequestState, PullRequestSummary, RemoteUrl, ReviewerCandidate,
+    PullRequestReviewer, PullRequestState, PullRequestSummary, RemoteUrl, RepositoryAccess,
+    ReviewerCandidate,
 };
 
 use crate::get_host_from_git_remote_url;
@@ -562,6 +563,60 @@ impl GitHostingProvider for Bitbucket {
             .mainbranch
             .and_then(|branch| branch.name)
             .map(SharedString::from))
+    }
+
+    async fn repository_access(
+        &self,
+        remote: &ParsedGitRemote,
+        auth: Option<GitHostAuth>,
+        http_client: Arc<dyn HttpClient>,
+    ) -> Result<Option<RepositoryAccess>> {
+        if self.is_self_hosted() {
+            return Ok(None);
+        }
+        let host = self
+            .base_url
+            .host_str()
+            .context("Bitbucket base URL has no host")?;
+        let query = format!(
+            "repository.full_name=\"{owner}/{repo}\"",
+            owner = remote.owner,
+            repo = remote.repo,
+        );
+        let url = format!(
+            "https://api.{host}/2.0/user/permissions/repositories?q={}",
+            encode(&query)
+        );
+        let request = bitbucket_request(BitbucketMethod::Get, &url, &auth, None)?;
+        let (status, bytes) =
+            bitbucket_send_with_status(&http_client, request, "checking Bitbucket access").await?;
+        match status {
+            401 => return Ok(Some(RepositoryAccess::None)),
+            status if (200..300).contains(&status) => {
+                let permissions: BitbucketRepositoryPermissions = serde_json::from_slice(&bytes)
+                    .context("parsing Bitbucket repository permissions")?;
+                if let Some(access) = permissions.access() {
+                    return Ok(Some(access));
+                }
+            }
+            // A token without the account scope can't read its own
+            // permissions, but can still show whether the repository is
+            // visible, which the fallback below covers.
+            _ => {}
+        }
+
+        // No explicit permission: a public repository, or one shared through a
+        // group the permissions endpoint does not expand. Visible means readable.
+        let api_base = bitbucket_cloud_api_base(&self.base_url, remote)?;
+        let request = bitbucket_request(BitbucketMethod::Get, &api_base, &auth, None)?;
+        let (status, _) =
+            bitbucket_send_with_status(&http_client, request, "checking Bitbucket repository")
+                .await?;
+        Ok(Some(if (200..300).contains(&status) {
+            RepositoryAccess::Read
+        } else {
+            RepositoryAccess::None
+        }))
     }
 
     async fn get_pull_request(
