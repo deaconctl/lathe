@@ -218,6 +218,7 @@ impl ScreenCaptureStream for TestWaylandScreenCaptureStream {
             is_main: None,
             label: None,
             resolution: size(DevicePixels(1), DevicePixels(1)),
+            kind: gpui::SourceKind::Display,
         })
     }
 }

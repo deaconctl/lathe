@@ -348,7 +348,7 @@ impl Render for Onboarding {
                                     .child(
                                         h_flex()
                                             .gap_4()
-                                            .child(img("images/lathe_logo.png").size(rems(2.5)))
+                                            .child(img("images/omega_logo.png").size(rems(2.5)))
                                             .child(
                                                 v_flex()
                                                     .child(

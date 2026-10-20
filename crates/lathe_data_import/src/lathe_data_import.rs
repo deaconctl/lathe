@@ -1008,13 +1008,15 @@ fn clone_tree(source: &Path, destination: &Path) -> Result<bool> {
         }
         if metadata.is_dir() {
             fs::create_dir_all(destination)?;
-            fs::set_permissions(destination, metadata.permissions())?;
             for entry in fs::read_dir(source)? {
                 let entry = entry?;
                 if !clone_recursively(&entry.path(), &destination.join(entry.file_name()))? {
                     return Ok(false);
                 }
             }
+            // Applied last: a read-only or unreadable mode set up front would
+            // block filling the directory, and block removing it after a failure.
+            fs::set_permissions(destination, metadata.permissions())?;
             return Ok(true);
         }
         let source_file = fs::File::open(source)?;

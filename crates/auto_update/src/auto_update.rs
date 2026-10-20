@@ -2179,7 +2179,7 @@ mod tests {
     }
 
     #[test]
-    fn test_linux_install_dir_updates_the_running_lathe_install() {
+    fn test_linux_install_dir_updates_the_running_omega_install() {
         let home = Path::new("/home/user");
 
         assert_eq!(
@@ -2188,7 +2188,7 @@ mod tests {
                 "-beta",
                 home,
             ),
-            PathBuf::from("/home/user/.local/share/lathe-beta")
+            PathBuf::from("/home/user/.local/share/omega-beta")
         );
         assert_eq!(
             linux_install_dir(
@@ -2236,7 +2236,7 @@ mod tests {
     #[test]
     fn test_linux_install_dir_never_targets_an_unrecognized_directory() {
         let home = Path::new("/home/user");
-        let fallback = PathBuf::from("/home/user/.local/share/lathe-beta");
+        let fallback = PathBuf::from("/home/user/.local/share/omega-beta");
 
         for running_app_path in [
             "/usr/local/libexec/omega-editor",

@@ -559,7 +559,7 @@ impl Render for WelcomePage {
                                     .justify_center()
                                     .mb_4()
                                     .gap_4()
-                                    .child(img("images/lathe_logo.png").size(rems_from_px(45_f32)))
+                                    .child(img("images/omega_logo.png").size(rems_from_px(45_f32)))
                                     .child(
                                         v_flex().child(Headline::new(welcome_label)).child(
                                             Label::new("The editor for what's next")
