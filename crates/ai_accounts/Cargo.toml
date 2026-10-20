@@ -28,3 +28,4 @@ uuid.workspace = true
 [dev-dependencies]
 lathe_data_import.workspace = true
 paths = { workspace = true, features = ["test-support"] }
+tempfile.workspace = true

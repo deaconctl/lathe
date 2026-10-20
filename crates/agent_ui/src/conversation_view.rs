@@ -803,6 +803,9 @@ pub struct ConversationView {
     notification_subscriptions: HashMap<WindowHandle<AgentNotification>, Vec<Subscription>>,
     auth_task: Option<Task<()>>,
     loading_status: Option<SharedString>,
+    /// The thread reloading on another AI account's process. The current state
+    /// stays on screen until this one finishes and replaces it.
+    account_switch: Option<ServerState>,
     /// When settings change, use this to see if the theme has changed (which
     /// causes mermaid diagrams to re-render).
     last_theme_id: Option<String>,
@@ -1128,6 +1131,7 @@ impl ConversationView {
             notification_subscriptions: HashMap::default(),
             auth_task: None,
             loading_status: None,
+            account_switch: None,
             last_theme_id: Some(cx.theme().id.clone()),
             draft_prompt_persist_task: None,
             code_span_resolver,
@@ -1145,6 +1149,7 @@ impl ConversationView {
         if let Some(connected) = self.as_connected() {
             connected.release_sessions(cx).detach_and_log_err(cx);
         }
+        self.account_switch = None;
 
         if let Some(connection) = previous_request_elicitation_connection
             && !next_request_elicitation_connection
@@ -1220,6 +1225,46 @@ impl ConversationView {
     }
 
     fn reset(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let state = self.reload_state(window, cx);
+        self.set_server_state(state, cx);
+
+        if let Some(view) = self.root_thread_view() {
+            view.update(cx, |this, cx| {
+                this.message_editor.update(cx, |editor, cx| {
+                    editor.set_session_capabilities(this.session_capabilities.clone(), cx);
+                });
+            });
+        }
+        cx.notify();
+    }
+
+    /// Reloads the thread on the agent's restarted connection (now running as
+    /// another AI account) while the current conversation stays visible, so
+    /// the switch doesn't flash the blank loading view. Sending is blocked in
+    /// the meantime because a message sent now would reach the old account
+    /// and be missing from the transcript the new account loads.
+    pub(crate) fn reload_for_account_switch(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        if let Some(view) = self.root_thread_view() {
+            view.update(cx, |view, cx| {
+                view.message_editor.update(cx, |editor, cx| {
+                    editor.set_read_only(true, cx);
+                });
+            });
+        }
+        let state = self.reload_state(window, cx);
+        self.account_switch = Some(state);
+        cx.notify();
+    }
+
+    pub(crate) fn is_switching_account(&self) -> bool {
+        self.account_switch.is_some()
+    }
+
+    fn reload_state(&mut self, window: &mut Window, cx: &mut Context<Self>) -> ServerState {
         let (resume_session_id, work_dirs, title) = self
             .root_thread_view()
             .map(|thread_view| {
@@ -1247,7 +1292,7 @@ impl ConversationView {
         self.clear_resolved_request_elicitations(cx);
         self.loading_status = None;
 
-        let state = Self::initial_state(
+        Self::initial_state(
             self.agent.clone(),
             self.connection_store.clone(),
             self.connection_key.clone(),
@@ -1260,17 +1305,7 @@ impl ConversationView {
             AgentThreadSource::AgentPanel,
             window,
             cx,
-        );
-        self.set_server_state(state, cx);
-
-        if let Some(view) = self.root_thread_view() {
-            view.update(cx, |this, cx| {
-                this.message_editor.update(cx, |editor, cx| {
-                    editor.set_session_capabilities(this.session_capabilities.clone(), cx);
-                });
-            });
-        }
-        cx.notify();
+        )
     }
 
     fn initial_state(
@@ -1753,7 +1788,11 @@ impl ConversationView {
                 pending_auth_method: None,
                 description,
             };
-            if let Some(connected) = this.as_connected_mut() {
+            // Mid account switch, the connected state on screen belongs to the
+            // previous account, so the sign-in prompt must replace it.
+            if this.account_switch.is_none()
+                && let Some(connected) = this.as_connected_mut()
+            {
                 connected.auth_state = auth_state;
                 cx.emit(StateChange);
                 if let Some(view) = connected.active_view()

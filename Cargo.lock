@@ -600,6 +600,7 @@ dependencies = [
  "serde_json",
  "settings",
  "smol",
+ "tempfile",
  "uuid",
 ]
 

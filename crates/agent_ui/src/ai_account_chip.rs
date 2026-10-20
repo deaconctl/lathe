@@ -1,15 +1,20 @@
 use std::rc::Rc;
 
+use std::path::PathBuf;
+
 use ai_accounts::{
-    AgentDescriptor, AiAccountsSettings, BrandAccent, WorkspaceAccountBindings, descriptor_for,
-    load_index, mark_account_used,
+    AgentDescriptor, AiAccountsSettings, BrandAccent, WorkspaceAccountBindings,
+    carry_conversation_to_account, descriptor_for, load_index, mark_account_used,
 };
 use collections::HashMap;
 use db::kvp::KeyValueStore;
 use gpui::{EntityId, Hsla, Rgba, WeakEntity, WindowAppearance, prelude::*};
 use project::AgentId;
 use settings::{Settings as _, SettingsContent};
-use ui::{ButtonLike, ButtonStyle, ContextMenu, PopoverMenu, prelude::*};
+use ui::{
+    ButtonLike, ButtonStyle, CommonAnimationExt, ContextMenu, ContextMenuEntry, PopoverMenu,
+    prelude::*,
+};
 use util::ResultExt as _;
 use workspace::{Workspace, WorkspaceId};
 
@@ -72,6 +77,14 @@ impl AgentPanel {
             .map(|account| (account.id.clone(), account.display_name.clone()))
             .collect();
         let has_workspace_binding = workspace_binding.is_some();
+        // Switching reloads the open thread on the new account's process,
+        // which would drop a turn that is still streaming.
+        let is_generating = self.active_agent_thread(cx).is_some_and(|thread| {
+            !matches!(thread.read(cx).status(), acp_thread::ThreadStatus::Idle)
+        });
+        let is_switching_account = self
+            .active_conversation_view()
+            .is_some_and(|conversation_view| conversation_view.read(cx).is_switching_account());
         let panel = cx.weak_entity();
         let menu_id = SharedString::from(format!("ai-account-chip-menu-{agent_id_static}"));
         let trigger_id = SharedString::from(format!("ai-account-chip-trigger-{agent_id_static}"));
@@ -88,7 +101,15 @@ impl AgentPanel {
                             .rounded_full()
                             .when_some(accent, |this, color| this.bg(color)),
                     )
-                    .child(Label::new(chip_label).size(LabelSize::Small)),
+                    .child(Label::new(chip_label).size(LabelSize::Small))
+                    .when(is_switching_account, |this| {
+                        this.child(
+                            Icon::new(IconName::ArrowCircle)
+                                .size(IconSize::XSmall)
+                                .color(Color::Muted)
+                                .with_rotate_animation(2),
+                        )
+                    }),
             );
 
         Some(
@@ -104,18 +125,20 @@ impl AgentPanel {
                             let has_alternatives = !other_accounts.is_empty();
                             for (account_id, display_name) in other_accounts {
                                 let panel = panel.clone();
-                                menu = menu.entry(
-                                    SharedString::from(format!("Switch to {display_name}")),
-                                    None,
-                                    move |_window, cx| {
-                                        let agent_id = agent_id_static.to_string();
-                                        let account_id = account_id.clone();
-                                        panel
-                                            .update(cx, |panel, cx| {
-                                                panel.switch_ai_account(agent_id, account_id, cx);
-                                            })
-                                            .ok();
-                                    },
+                                menu = menu.item(
+                                    ContextMenuEntry::new(format!("Switch to {display_name}"))
+                                        .disabled(is_generating || is_switching_account)
+                                        .handler(move |window, cx| {
+                                            let agent_id = agent_id_static.to_string();
+                                            let account_id = account_id.clone();
+                                            panel
+                                                .update(cx, |panel, cx| {
+                                                    panel.switch_ai_account_in_thread(
+                                                        agent_id, account_id, window, cx,
+                                                    );
+                                                })
+                                                .ok();
+                                        }),
                                 );
                             }
                             if has_workspace_binding {
@@ -196,6 +219,99 @@ impl AgentPanel {
         );
         self.restart_ai_agent_connection(&agent_id, cx);
         cx.notify();
+    }
+
+    /// Like `switch_ai_account`, and also moves the open thread over to the
+    /// new account so the conversation continues there.
+    fn switch_ai_account_in_thread(
+        &mut self,
+        agent_id: String,
+        account_id: String,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let index = load_index();
+        let previous_config_dir = AiAccountsSettings::get_global(cx)
+            .resolve_account(
+                &agent_id,
+                WorkspaceAccountBindings::binding_for(self.project_entity_id(), &agent_id, cx)
+                    .as_deref(),
+                &index,
+            )
+            .map(|account| account.config_dir.clone());
+        let next_config_dir = index
+            .accounts
+            .iter()
+            .find(|account| account.id == account_id)
+            .map(|account| account.config_dir.clone());
+        self.switch_ai_account(agent_id.clone(), account_id, cx);
+        if let (Some(from), Some(to)) = (previous_config_dir, next_config_dir)
+            && from != to
+        {
+            self.move_active_thread_to_account(agent_id, from, to, window, cx);
+        }
+    }
+
+    /// The open thread keeps talking to the process it was started with, so
+    /// without this a switch only affects threads created afterwards. A thread
+    /// with history is reloaded by session id on the new account's process,
+    /// which first needs the transcript copied into that account's config dir.
+    fn move_active_thread_to_account(
+        &mut self,
+        agent_id: String,
+        from_config_dir: PathBuf,
+        to_config_dir: PathBuf,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(conversation_view) = self.active_conversation_view().cloned() else {
+            return;
+        };
+        let Some(thread) = conversation_view.read(cx).root_thread(cx) else {
+            return;
+        };
+        let thread = thread.read(cx);
+        if thread.connection().agent_id().0.as_ref() != agent_id {
+            return;
+        }
+        if thread.entries().is_empty() {
+            window.dispatch_action(
+                Box::new(NewExternalAgentThread {
+                    agent: AgentId::new(agent_id),
+                }),
+                cx,
+            );
+            return;
+        }
+        let session_id = thread.session_id().0.to_string();
+        let conversation_view = conversation_view.downgrade();
+        cx.spawn_in(window, async move |_this, cx| {
+            let carried = cx
+                .background_spawn({
+                    let agent_id = agent_id.clone();
+                    let session_id = session_id.clone();
+                    async move {
+                        carry_conversation_to_account(
+                            &agent_id,
+                            &session_id,
+                            &from_config_dir,
+                            &to_config_dir,
+                        )
+                    }
+                })
+                .await?;
+            if !carried {
+                log::warn!(
+                    "ai_accounts: no {agent_id} transcript found for session {session_id}; \
+                     the open thread stays on the previous account"
+                );
+                return Ok(());
+            }
+            conversation_view.update_in(cx, |conversation_view, window, cx| {
+                conversation_view.reload_for_account_switch(window, cx);
+            })
+        })
+        .detach_and_log_err(cx);
     }
 
     fn clear_ai_account_binding(&mut self, agent_id: &str, cx: &mut Context<Self>) {

@@ -788,6 +788,93 @@ pub fn resume_command(agent_id: &str, conversation_id: &str) -> Option<String> {
     }
 }
 
+/// Copies one conversation's on-disk transcript from one account's config dir
+/// into another's, so the agent spawned for `to_config_dir` can load it by
+/// session id. Agents only look for transcripts under their own config dir,
+/// so switching accounts mid-thread needs this. An existing copy is
+/// overwritten because the account being switched away from holds the newest
+/// turns. Returns `false` when there is nothing to carry: no transcript was
+/// written yet, or the agent's transcript layout isn't known (Gemini keys its
+/// chat files by project hash, not by session id).
+pub fn carry_conversation_to_account(
+    agent_id: &str,
+    session_id: &str,
+    from_config_dir: &Path,
+    to_config_dir: &Path,
+) -> Result<bool> {
+    if session_id.is_empty()
+        || session_id
+            .chars()
+            .any(|character| !(character.is_ascii_alphanumeric() || character == '-'))
+    {
+        return Err(anyhow!("unexpected session id {session_id:?}"));
+    }
+    let transcripts = match agent_id {
+        "claude-acp" => claude_transcript_paths(from_config_dir, session_id),
+        "codex-acp" => codex_transcript_paths(from_config_dir, session_id),
+        _ => Vec::new(),
+    };
+    for source in &transcripts {
+        let relative = source.strip_prefix(from_config_dir)?;
+        let destination = to_config_dir.join(relative);
+        copy_recursively(source, &destination).with_context(|| {
+            format!("copying {} to {}", source.display(), destination.display())
+        })?;
+    }
+    Ok(!transcripts.is_empty())
+}
+
+/// Claude Code keeps `projects/<encoded cwd>/<session id>.jsonl`, plus a
+/// sibling `<session id>/` dir holding subagent transcripts and large tool
+/// results the main transcript refers to.
+fn claude_transcript_paths(config_dir: &Path, session_id: &str) -> Vec<PathBuf> {
+    let Ok(project_entries) = std::fs::read_dir(config_dir.join("projects")) else {
+        return Vec::new();
+    };
+    let mut paths = Vec::new();
+    for project_entry in project_entries.flatten() {
+        let transcript = project_entry.path().join(format!("{session_id}.jsonl"));
+        if transcript.is_file() {
+            paths.push(transcript);
+            let sidecar = project_entry.path().join(session_id);
+            if sidecar.is_dir() {
+                paths.push(sidecar);
+            }
+        }
+    }
+    paths
+}
+
+fn codex_transcript_paths(config_dir: &Path, session_id: &str) -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    walk_jsonl_files(&config_dir.join("sessions"), &mut |path| {
+        let is_match = path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .is_some_and(|stem| stem.starts_with("rollout-") && stem.ends_with(session_id));
+        if is_match {
+            paths.push(path.to_path_buf());
+        }
+    });
+    paths
+}
+
+fn copy_recursively(source: &Path, destination: &Path) -> Result<()> {
+    if source.is_dir() {
+        std::fs::create_dir_all(destination)?;
+        for entry in std::fs::read_dir(source)? {
+            let entry = entry?;
+            copy_recursively(&entry.path(), &destination.join(entry.file_name()))?;
+        }
+    } else {
+        if let Some(parent) = destination.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::copy(source, destination)?;
+    }
+    Ok(())
+}
+
 /// Lists conversations stored on disk in the given account's config dir.
 /// Returns an empty `Vec` for agents whose history format hasn't been
 /// implemented yet — currently only Claude Code is parsed; Codex and Gemini
@@ -1520,5 +1607,83 @@ mod tests {
     #[test]
     fn resume_command_returns_none_for_unknown_agent() {
         assert!(resume_command("nope", "abc-123").is_none());
+    }
+
+    fn write_file(path: &Path, contents: &str) {
+        std::fs::create_dir_all(path.parent().expect("parent")).expect("create parent");
+        std::fs::write(path, contents).expect("write file");
+    }
+
+    #[test]
+    fn carry_conversation_copies_codex_rollout_to_same_relative_path() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let from = root.path().join("work");
+        let to = root.path().join("personal");
+        let session_id = "01a13696-573d-7741-abbc-f16801d52361";
+        let relative =
+            format!("sessions/2026/10/13/rollout-2026-10-13T14-46-24-{session_id}.jsonl");
+        write_file(&from.join(&relative), "newest");
+        write_file(&to.join(&relative), "stale");
+        write_file(
+            &from.join("sessions/2026/10/13/rollout-2026-10-13T09-00-00-other.jsonl"),
+            "other",
+        );
+
+        let carried =
+            carry_conversation_to_account("codex-acp", session_id, &from, &to).expect("carry");
+
+        assert!(carried);
+        assert_eq!(
+            std::fs::read_to_string(to.join(&relative)).expect("read copy"),
+            "newest"
+        );
+        assert!(
+            !to.join("sessions/2026/10/13/rollout-2026-10-13T09-00-00-other.jsonl")
+                .exists()
+        );
+    }
+
+    #[test]
+    fn carry_conversation_copies_claude_transcript_and_sidecar_dir() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let from = root.path().join("work");
+        let to = root.path().join("personal");
+        let session_id = "5973b6c0-94b8-487b-a530-2aeb6098ae0e";
+        let project = "projects/-Users-someone-code-app";
+        write_file(&from.join(format!("{project}/{session_id}.jsonl")), "turns");
+        write_file(
+            &from.join(format!("{project}/{session_id}/subagents/agent-1.jsonl")),
+            "subagent",
+        );
+
+        let carried =
+            carry_conversation_to_account("claude-acp", session_id, &from, &to).expect("carry");
+
+        assert!(carried);
+        assert!(to.join(format!("{project}/{session_id}.jsonl")).is_file());
+        assert!(
+            to.join(format!("{project}/{session_id}/subagents/agent-1.jsonl"))
+                .is_file()
+        );
+    }
+
+    #[test]
+    fn carry_conversation_reports_nothing_to_carry() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let from = root.path().join("work");
+        let to = root.path().join("personal");
+        let session_id = "5973b6c0-94b8-487b-a530-2aeb6098ae0e";
+        assert!(
+            !carry_conversation_to_account("codex-acp", session_id, &from, &to).expect("carry")
+        );
+        assert!(!carry_conversation_to_account("gemini", session_id, &from, &to).expect("carry"));
+    }
+
+    #[test]
+    fn carry_conversation_rejects_path_like_session_ids() {
+        let root = tempfile::tempdir().expect("tempdir");
+        let result =
+            carry_conversation_to_account("claude-acp", "../escape", root.path(), root.path());
+        assert!(result.is_err());
     }
 }
