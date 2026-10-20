@@ -857,8 +857,6 @@ impl AutoUpdater {
                 )
             });
 
-        Self::check_dependencies()?;
-
         this.update(cx, |this, cx| {
             this.status = AutoUpdateStatus::Checking;
             log::info!("Auto Update: checking for updates");
@@ -867,6 +865,9 @@ impl AutoUpdater {
 
         let fetched_release_data =
             Self::get_release_asset(&this, release_channel, None, "zed", OS, ARCH, cx).await?;
+        // Checked after the fetch so installs that can't self-update (Linux
+        // tarballs without rsync) still send the usage ping with the check.
+        Self::check_dependencies()?;
         let fetched_version = fetched_release_data.clone().version;
         let app_commit_sha = Ok(cx.update(|cx| AppCommitSha::try_global(cx).map(|sha| sha.full())));
         let newer_version = Self::check_if_fetched_version_is_newer(
