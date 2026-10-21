@@ -257,6 +257,9 @@ Sign into more than one Zed Cloud account and switch between them from the avata
 ### Color swatches and a color picker
 Hex, `0x` hex, `rgb()`, and `hsl()` values get a small swatch in front of them, with or without a language server. Click the swatch (or right-click and choose **Pick Color**) to adjust the color; the new value is written back in the same notation as one undo step. An all-digit `#123` in Markdown or a commit message is left alone, since that's usually an issue number.
 
+### Search Everywhere
+`search everywhere: toggle` opens one picker that searches files, symbols, and actions together, so you don't have to remember whether you wanted the file finder, the symbol picker, or the command palette. Results come in sections, a few from each source, with a **Show all** row when there's more; tabs across the top (All, Types, Files, Symbols, Actions) narrow it to one kind, and Tab cycles through them. Types are the classes, structs, interfaces, and enums from the symbol results. Files and actions show up as you type, and symbols fill in as each language server answers, so a slow server doesn't hold up the rest. Picking a result does what its own picker would: files open the way the file finder opens them, symbols jump to their definition, actions run. Press `shift shift` (tap Shift twice) to open it, in every keymap. In the JetBrains keymap that used to open the command palette.
+
 ### Open Recent File
 **Open Recent File** in the File menu and on the welcome page (`alt-cmd-shift-o` on macOS) reopens files you've had open recently, not just projects.
 

@@ -759,6 +759,7 @@
       "ctrl-shift-tab": ["tab_switcher::Toggle", { "select_last": true }],
       "ctrl-tab": "tab_switcher::Toggle",
       "cmd-shift-p": "command_palette::Toggle",
+      "shift shift": "search_everywhere::Toggle",
       "cmd-shift-m": "diagnostics::Deploy",
       "cmd-shift-e": "project_panel::ToggleFocus",
       "ctrl-shift-alt-p": "pull_request_panel::ToggleFocus",

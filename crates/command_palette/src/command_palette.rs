@@ -117,23 +117,7 @@ impl CommandPalette {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Self {
-        let filter = CommandPaletteFilter::try_global(cx);
-
-        let commands = window
-            .available_actions(cx)
-            .into_iter()
-            .filter_map(|action| {
-                if filter.is_some_and(|filter| filter.is_hidden(&*action)) {
-                    return None;
-                }
-
-                Some(Command {
-                    name: SharedString::from(humanize_action_name(action.name())),
-                    action,
-                    usage: None,
-                })
-            })
-            .collect();
+        let commands = available_commands(window, cx);
 
         let delegate = CommandPaletteDelegate::new(
             cx.entity().downgrade(),
@@ -306,6 +290,26 @@ impl QueryHistory {
     }
 }
 
+fn available_commands(window: &Window, cx: &App) -> Vec<Command> {
+    let filter = CommandPaletteFilter::try_global(cx);
+
+    window
+        .available_actions(cx)
+        .into_iter()
+        .filter_map(|action| {
+            if filter.is_some_and(|filter| filter.is_hidden(&*action)) {
+                return None;
+            }
+
+            Some(Command {
+                name: SharedString::from(humanize_action_name(action.name())),
+                action,
+                usage: None,
+            })
+        })
+        .collect()
+}
+
 impl Clone for Command {
     fn clone(&self) -> Self {
         Self {
@@ -317,6 +321,23 @@ impl Clone for Command {
 }
 
 impl CommandPaletteDelegate {
+    /// Builds a delegate over the actions available to the focused element, for a
+    /// picker hosted outside `CommandPalette` (Lathe's Search Everywhere). With no
+    /// palette behind it, `dismissed` does nothing and the host dismisses itself.
+    pub fn for_focused(
+        workspace: WeakEntity<Workspace>,
+        previous_focus_handle: FocusHandle,
+        window: &Window,
+        cx: &App,
+    ) -> Self {
+        Self::new(
+            WeakEntity::new_invalid(),
+            workspace,
+            available_commands(window, cx),
+            previous_focus_handle,
+        )
+    }
+
     fn new(
         command_palette: WeakEntity<CommandPalette>,
         workspace: WeakEntity<Workspace>,

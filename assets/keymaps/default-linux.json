@@ -707,6 +707,7 @@
       "ctrl-e": "file_finder::Toggle",
       "f1": "command_palette::Toggle",
       "ctrl-shift-p": "command_palette::Toggle",
+      "shift shift": "search_everywhere::Toggle",
       "ctrl-shift-m": "diagnostics::Deploy",
       "ctrl-shift-e": "project_panel::ToggleFocus",
       "ctrl-shift-alt-p": "pull_request_panel::ToggleFocus",

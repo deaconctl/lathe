@@ -50,7 +50,7 @@ pub struct ProjectSymbolsDelegate {
 }
 
 impl ProjectSymbolsDelegate {
-    fn new(workspace: WeakEntity<Workspace>, project: Entity<Project>) -> Self {
+    pub fn new(workspace: WeakEntity<Workspace>, project: Entity<Project>) -> Self {
         Self {
             workspace,
             project,
@@ -61,6 +61,10 @@ impl ProjectSymbolsDelegate {
             matches: Default::default(),
             show_worktree_root_name: false,
         }
+    }
+
+    pub fn symbol_for_match(&self, ix: usize) -> Option<&Symbol> {
+        self.symbols.get(self.matches.get(ix)?.candidate_id)
     }
 
     // Note if you make changes to this, also change `agent_ui::completion_provider::search_symbols`

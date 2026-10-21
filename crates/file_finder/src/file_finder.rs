@@ -131,6 +131,38 @@ impl FileFinder {
         window: &mut Window,
         cx: &mut Context<Workspace>,
     ) -> Task<()> {
+        let (currently_opened_path, history_items) = Self::history_items(workspace, cx);
+        cx.spawn_in(window, async move |workspace, cx| {
+            let history_items = join_all(history_items).await.into_iter().flatten();
+
+            workspace
+                .update_in(cx, |workspace, window, cx| {
+                    let project = workspace.project().clone();
+                    let weak_workspace = cx.entity().downgrade();
+                    workspace.toggle_modal(window, cx, |window, cx| {
+                        let delegate = FileFinderDelegate::new(
+                            cx.entity().downgrade(),
+                            weak_workspace,
+                            project,
+                            currently_opened_path,
+                            history_items.collect(),
+                            separate_history,
+                            include_ignored,
+                            window,
+                            cx,
+                        );
+
+                        FileFinder::new(delegate, seed_query, window, cx)
+                    });
+                })
+                .ok();
+        })
+    }
+
+    fn history_items(
+        workspace: &Workspace,
+        cx: &App,
+    ) -> (Option<FoundPath>, Vec<Task<Option<FoundPath>>>) {
         let project = workspace.project().read(cx);
         let fs = project.fs();
 
@@ -165,31 +197,7 @@ impl FileFinder {
                 }
             })
             .collect::<Vec<_>>();
-        cx.spawn_in(window, async move |workspace, cx| {
-            let history_items = join_all(history_items).await.into_iter().flatten();
-
-            workspace
-                .update_in(cx, |workspace, window, cx| {
-                    let project = workspace.project().clone();
-                    let weak_workspace = cx.entity().downgrade();
-                    workspace.toggle_modal(window, cx, |window, cx| {
-                        let delegate = FileFinderDelegate::new(
-                            cx.entity().downgrade(),
-                            weak_workspace,
-                            project,
-                            currently_opened_path,
-                            history_items.collect(),
-                            separate_history,
-                            include_ignored,
-                            window,
-                            cx,
-                        );
-
-                        FileFinder::new(delegate, seed_query, window, cx)
-                    });
-                })
-                .ok();
-        })
+        (currently_opened_path, history_items)
     }
 
     /// The query to pre-fill the finder with from the user's latest selection,
@@ -1057,6 +1065,52 @@ impl FileFinderDelegate {
         cx: &mut Context<FileFinder>,
     ) -> Self {
         Self::subscribe_to_updates(&project, window, cx);
+        Self::new_unsubscribed(
+            file_finder,
+            workspace,
+            project,
+            currently_opened_path,
+            history_items,
+            separate_history,
+            include_ignored,
+            cx,
+        )
+    }
+
+    /// Builds a delegate for a picker hosted outside the `FileFinder` modal, such
+    /// as Lathe's Search Everywhere. With no `FileFinder` behind it, the host has
+    /// to refresh it on worktree changes and dismiss itself after a confirm.
+    pub fn new_detached(workspace: &Workspace, cx: &mut App) -> Task<Self> {
+        let (currently_opened_path, history_items) = FileFinder::history_items(workspace, cx);
+        let weak_workspace = workspace.weak_handle();
+        let project = workspace.project().clone();
+        cx.spawn(async move |cx| {
+            let history_items = join_all(history_items).await.into_iter().flatten().collect();
+            cx.update(|cx| {
+                Self::new_unsubscribed(
+                    WeakEntity::new_invalid(),
+                    weak_workspace,
+                    project,
+                    currently_opened_path,
+                    history_items,
+                    false,
+                    None,
+                    cx,
+                )
+            })
+        })
+    }
+
+    fn new_unsubscribed(
+        file_finder: WeakEntity<FileFinder>,
+        workspace: WeakEntity<Workspace>,
+        project: Entity<Project>,
+        currently_opened_path: Option<FoundPath>,
+        history_items: Vec<FoundPath>,
+        separate_history: bool,
+        include_ignored: Option<bool>,
+        cx: &mut App,
+    ) -> Self {
         let channel_store = if FileFinderSettings::get_global(cx).include_channels {
             ChannelStore::try_global(cx)
         } else {
