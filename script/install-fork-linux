@@ -37,7 +37,7 @@ case "$channel" in
 esac
 
 # Find the tarball from package-fork-linux output
-tarball=$(ls "${target_dir}/release"/Omega-*-linux.tar.gz 2>/dev/null | head -1)
+tarball=$(ls "${target_dir}/release"/Omega-*-linux.tar.gz 2>/dev/null | sort -V | tail -1)
 
 if [ -z "$tarball" ]; then
     echo "Error: Linux tarball not found in ${target_dir}/release/"
@@ -55,17 +55,21 @@ echo "=== Installing ${app_name} ==="
 echo "  From: ${tarball}"
 echo "  To:   ${install_dir}"
 
-# Clean previous installation
-if [ -d "$install_dir" ]; then
-    echo "Removing existing installation..."
-    rm -rf "$install_dir"
-fi
-
 # Extract to a temp dir first
 temp_dir=$(mktemp -d)
 trap 'rm -rf "$temp_dir"' EXIT
 
 tar -xzf "$tarball" -C "$temp_dir"
+
+if [ ! -d "$temp_dir/omega${suffix}.app" ]; then
+    echo "Error: ${tarball} does not contain omega${suffix}.app (built for a different channel?)"
+    exit 1
+fi
+
+if [ -d "$install_dir" ]; then
+    echo "Removing existing installation..."
+    rm -rf "$install_dir"
+fi
 
 # Move app directory into place
 mkdir -p "$install_dir"
